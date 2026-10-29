@@ -71,4 +71,25 @@ mod tests {
 
         assert!(deck.draw().is_none());
     }
+
+    #[test]
+    fn same_seed_produces_same_shuffle() {
+        let mut first_deck = Deck::new();
+        let mut second_deck = Deck::new();
+
+        first_deck.shuffle(42);
+        second_deck.shuffle(42);
+
+        assert_eq!(first_deck.cards, second_deck.cards);
+    }
+
+    #[test]
+    fn shuffle_preserves_all_52_unique_cards() {
+        let mut deck = Deck::new();
+        deck.shuffle(42);
+        let unique_cards: HashSet<_> = deck.cards.iter().collect();
+
+        assert_eq!(deck.cards.len(), 52);
+        assert_eq!(unique_cards.len(), 52);
+    }
 }
