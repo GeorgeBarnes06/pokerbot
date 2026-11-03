@@ -160,7 +160,7 @@ impl GameState {
     }
 
     /// Moves up to `amount` from `seat`'s stack into the pot; returns what was actually posted.
-    fn post(&mut self, seat: usize, amount: Chips) -> Chips {
+    pub(crate) fn post(&mut self, seat: usize, amount: Chips) -> Chips {
         let player = &mut self.players[seat];
         let posted = amount.min(player.stack);
         player.stack -= posted;
