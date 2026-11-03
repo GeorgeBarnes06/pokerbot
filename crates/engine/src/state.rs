@@ -94,13 +94,82 @@ impl GameState {
     }
 
     /// First seat clockwise after `from` whose player matches `pred`.
-    ///
     /// `from` itself is checked last, so it is returned only if no other seat matches.
     pub fn next_seat(&self, from: usize, pred: impl Fn(&Player) -> bool) -> Option<usize> {
         let n = self.players.len();
         (1..=n)
             .map(|offset| (from + offset) % n)
             .find(|&seat| pred(&self.players[seat]))
+    }
+
+    pub fn start_hand(&mut self, seed: u64) {
+        self.hand_number += 1;
+        for player in &mut self.players {
+            player.hole_cards = None;
+            player.street_bet = 0;
+            player.hand_contribution = 0;
+            if player.status != PlayerStatus::Busted {
+                player.status = PlayerStatus::Active;
+            }
+        }
+        self.board.clear();
+        self.street = Street::Preflop;
+        self.last_aggressor = None;
+
+        let not_busted = |p: &Player| p.status != PlayerStatus::Busted;
+        self.button = self
+            .next_seat(self.button, not_busted)
+            .expect("button must be on a non-busted player");
+
+        self.deck = Deck::new();
+        self.deck.shuffle(seed);
+
+        // Deal like a real dealer: one card to each live player starting left of
+        // the button, then a second round.
+        let n = self.players.len();
+        let order: Vec<usize> = (1..=n)
+            .map(|offset| (self.button + offset) % n)
+            .filter(|&seat| not_busted(&self.players[seat]))
+            .collect();
+        let first_cards: Vec<Card> = order
+            .iter()
+            .map(|_| self.deck.draw().expect("deck has enough cards"))
+            .collect();
+        for (&seat, first_card) in order.iter().zip(first_cards) {
+            let second_card = self.deck.draw().expect("deck has enough cards");
+            self.players[seat].hole_cards = Some([first_card, second_card]);
+        }
+
+        let live_count = self.players.iter().filter(|p| not_busted(p)).count();
+        let (small_blind_seat, big_blind_seat) = if live_count == 2 {
+            // Heads-up: the button posts the small blind.
+            let big = self.next_seat(self.button, not_busted).expect("two players");
+            (self.button, big)
+        } else {
+            let small = self.next_seat(self.button, not_busted).expect("at least one player");
+            let big = self.next_seat(small, not_busted).expect("at least two players");
+            (small, big)
+        };
+        self.post(small_blind_seat, self.blinds.small);
+        self.post(big_blind_seat, self.blinds.big);
+
+        self.current_bet = self.blinds.big;
+        self.min_raise = self.blinds.big;
+        // First to act is left of the big blind; heads-up this lands back on the button.
+        self.to_act = self.next_seat(big_blind_seat, |p| p.status == PlayerStatus::Active);
+    }
+
+    /// Moves up to `amount` from `seat`'s stack into the pot; returns what was actually posted.
+    fn post(&mut self, seat: usize, amount: Chips) -> Chips {
+        let player = &mut self.players[seat];
+        let posted = amount.min(player.stack);
+        player.stack -= posted;
+        player.street_bet += posted;
+        player.hand_contribution += posted;
+        if player.stack == 0 {
+            player.status = PlayerStatus::AllIn;
+        }
+        posted
     }
 }
 
@@ -120,7 +189,11 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{Blinds, GameState, Player, PlayerStatus};
+    use crate::card::Card;
+    use crate::deck::Deck;
 
     fn table(count: usize) -> GameState {
         let players = (0..count)
@@ -195,5 +268,127 @@ mod tests {
         let state = table(8);
 
         assert_eq!(state.next_seat(0, |_| false), None);
+    }
+
+    #[test]
+    fn start_hand_moves_button_and_posts_blinds() {
+        let mut state = table(8);
+        state.start_hand(1);
+
+        assert_eq!(state.hand_number, 1);
+        assert_eq!(state.button, 1);
+        assert_eq!(state.players[2].street_bet, 5);
+        assert_eq!(state.players[2].stack, 995);
+        assert_eq!(state.players[3].street_bet, 10);
+        assert_eq!(state.players[3].hand_contribution, 10);
+        assert_eq!(state.players[3].stack, 990);
+        assert_eq!(state.current_bet, 10);
+        assert_eq!(state.min_raise, 10);
+        assert_eq!(state.to_act, Some(4));
+    }
+
+    #[test]
+    fn start_hand_skips_busted_seats() {
+        let mut state = table(8);
+        state.players[1].status = PlayerStatus::Busted;
+        state.players[3].status = PlayerStatus::Busted;
+        state.start_hand(1);
+
+        assert_eq!(state.button, 2);
+        assert_eq!(state.players[4].street_bet, 5);
+        assert_eq!(state.players[5].street_bet, 10);
+        assert_eq!(state.to_act, Some(6));
+    }
+
+    #[test]
+    fn start_hand_heads_up_button_posts_small_blind_and_acts_first() {
+        let mut state = table(2);
+        state.start_hand(1);
+
+        assert_eq!(state.button, 1);
+        assert_eq!(state.players[1].street_bet, 5);
+        assert_eq!(state.players[0].street_bet, 10);
+        assert_eq!(state.to_act, Some(1));
+    }
+
+    #[test]
+    fn short_stack_goes_all_in_on_big_blind() {
+        let mut state = table(8);
+        state.players[3].stack = 6;
+        state.start_hand(1);
+
+        assert_eq!(state.players[3].street_bet, 6);
+        assert_eq!(state.players[3].stack, 0);
+        assert_eq!(state.players[3].status, PlayerStatus::AllIn);
+    }
+
+    #[test]
+    fn start_hand_deals_two_unique_cards_to_live_players() {
+        let mut state = table(8);
+        state.players[5].status = PlayerStatus::Busted;
+        state.start_hand(1);
+
+        let mut seen = HashSet::new();
+        for player in &state.players {
+            match player.hole_cards {
+                Some([a, b]) => {
+                    assert!(seen.insert(a) && seen.insert(b), "duplicate card");
+                }
+                None => assert_eq!(player.status, PlayerStatus::Busted),
+            }
+        }
+        assert_eq!(seen.len(), 14);
+        assert_eq!(state.deck.cards.len(), 52 - 14);
+    }
+
+    #[test]
+    fn start_hand_deals_one_card_per_round_from_left_of_button() {
+        let mut state = table(3);
+        state.start_hand(7);
+
+        // Recreate the same shuffled deck; draw() takes from the end.
+        let mut deck = Deck::new();
+        deck.shuffle(7);
+        let draws: Vec<Card> = (0..6).map(|_| deck.draw().unwrap()).collect();
+
+        // Button moves to seat 1, so dealing order is seats 2, 0, 1.
+        assert_eq!(state.players[2].hole_cards, Some([draws[0], draws[3]]));
+        assert_eq!(state.players[0].hole_cards, Some([draws[1], draws[4]]));
+        assert_eq!(state.players[1].hole_cards, Some([draws[2], draws[5]]));
+    }
+
+    #[test]
+    fn same_seed_deals_same_hands() {
+        let mut first = table(8);
+        let mut second = table(8);
+        first.start_hand(42);
+        second.start_hand(42);
+
+        for (a, b) in first.players.iter().zip(&second.players) {
+            assert_eq!(a.hole_cards, b.hole_cards);
+        }
+    }
+
+    #[test]
+    fn busted_player_gets_no_cards() {
+        let mut state = table(8);
+        state.start_hand(1);
+        state.players[6].status = PlayerStatus::Busted;
+        state.start_hand(2);
+
+        assert_eq!(state.players[6].hole_cards, None);
+    }
+
+    #[test]
+    fn start_hand_clears_previous_hand() {
+        let mut state = table(8);
+        state.start_hand(1);
+        state.players[4].status = PlayerStatus::Folded;
+        state.start_hand(2);
+
+        assert_eq!(state.hand_number, 2);
+        assert_eq!(state.players[4].status, PlayerStatus::Active);
+        assert_eq!(state.players[2].street_bet, 0);
+        assert_eq!(state.players[2].hand_contribution, 0);
     }
 }
