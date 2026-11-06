@@ -1,3 +1,5 @@
+//! Game state, players, and seat status.
+
 use serde::{Deserialize, Serialize};
 
 use crate::card::Card;
@@ -29,6 +31,8 @@ pub struct Player {
     pub street_bet: Chips,
     /// Chips put in over the whole hand; used to build side pots.
     pub hand_contribution: Chips,
+    /// Whether the player has acted since the street began or since the last full raise.
+    pub acted_this_street: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -108,6 +112,7 @@ impl GameState {
             player.hole_cards = None;
             player.street_bet = 0;
             player.hand_contribution = 0;
+            player.acted_this_street = false;
             if player.status != PlayerStatus::Busted {
                 player.status = PlayerStatus::Active;
             }
@@ -156,7 +161,8 @@ impl GameState {
         self.current_bet = self.blinds.big;
         self.min_raise = self.blinds.big;
         // First to act is left of the big blind; heads-up this lands back on the button.
-        self.to_act = self.next_seat(big_blind_seat, |p| p.status == PlayerStatus::Active);
+        // If blinds put everyone all-in, this runs the board out instead.
+        self.pass_turn(big_blind_seat);
     }
 
     /// Moves up to `amount` from `seat`'s stack into the pot; returns what was actually posted.
@@ -183,6 +189,7 @@ impl Player {
             status: PlayerStatus::Active,
             street_bet: 0,
             hand_contribution: 0,
+            acted_this_street: false,
         }
     }
 }
