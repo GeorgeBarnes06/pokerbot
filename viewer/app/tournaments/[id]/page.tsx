@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
+import { LiveTables } from "@/components/LiveTables";
 import { BracketLink, Divider, Exhibit, Stat } from "@/components/Sheet";
 import { chips, signedChips } from "@/lib/format";
-import { loadSummary } from "@/lib/logs";
+import { gridData } from "@/lib/grid";
+import { loadHand, loadSummary } from "@/lib/logs";
 import type { MatchSummary } from "@/types/log";
 
 const HANDS_PER_PAGE = 100;
@@ -20,8 +22,8 @@ export default function MatchPage({ params, searchParams }: PageProps<"/tourname
 }
 
 async function Match({ id, page }: { id: string; page: number }) {
-  const summary = await loadSummary(id);
-  if (!summary) notFound();
+  const [summary, firstHand] = await Promise.all([loadSummary(id), loadHand(id, 1)]);
+  if (!summary || !firstHand) notFound();
 
   const { config } = summary;
   const blinds = config.blind_levels[0];
@@ -34,7 +36,7 @@ async function Match({ id, page }: { id: string; page: number }) {
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap justify-between gap-x-4">
           <h1 className="font-normal uppercase">{id}</h1>
-          <BracketLink href={`/tournaments/${id}/hands/1?autoplay=8`}>Watch from hand 1</BracketLink>
+          <BracketLink href={`/tournaments/${id}/hands/1`}>Replay one hand</BracketLink>
         </div>
         <p className="uppercase">
           {config.players.length} bots, no-limit hold&apos;em, blinds {chips(blinds.small)}/
@@ -58,8 +60,24 @@ async function Match({ id, page }: { id: string; page: number }) {
 
       <Divider />
 
+      <Exhibit label="A" title="Live tables">
+        <LiveTables
+          matchId={id}
+          totalHands={summary.hands.length}
+          tableSize={config.players.length}
+          playerCount={config.players.length}
+          handsPerSecond={summary.hands_per_second}
+          grid={gridData(summary)}
+          initialHand={firstHand}
+          autoplay
+          syncUrl={false}
+        />
+      </Exhibit>
+
+      <Divider />
+
       <Exhibit
-        label="A"
+        label="B"
         title={cash ? "Leaderboard" : "Final standings"}
         aside={cash ? "ranked by net chips" : "ranked by finish"}
       >
@@ -68,7 +86,7 @@ async function Match({ id, page }: { id: string; page: number }) {
 
       <Divider />
 
-      <Exhibit label="B" title="Every hand" aside={`${chips(summary.hands.length)} hands`}>
+      <Exhibit label="C" title="Every hand" aside={`${chips(summary.hands.length)} hands`}>
         <HandTable summary={summary} id={id} page={page} />
       </Exhibit>
     </>

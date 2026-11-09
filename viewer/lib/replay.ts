@@ -1,60 +1,60 @@
-// Rebuilds the table step by step from a hand log, for the replay view.
+// Rebuilds the table step by step from a hand log, for the live table and replays.
 
-import { categoryLabel, chips } from "@/lib/format";
+import { cardText, categoryLabel, chips } from "@/lib/format";
 import type { Card, HandLog, Street } from "@/types/log";
+
+export type FrameType = "start" | "blind" | "deal" | "act" | "street" | "refund" | "show";
 
 export interface SeatFrame {
   seat: number;
   name: string;
+  /** "S1 CFR-7": seat number (1-based) and name. */
+  label: string;
+  /** Null until the cards are dealt. */
   holeCards: [Card, Card] | null;
   stack: number;
-  /** Chips in front of the player on the current street. */
-  bet: number;
   folded: boolean;
   allIn: boolean;
-  /** Short label for the player's latest action, e.g. "Call" or "Raise 60". */
-  lastAction: string | null;
+  /** Share of the pot this hand wins on average, 0–1, every hand known.
+   *  Null if folded, not dealt yet, or not recorded for this match. */
+  equity: number | null;
+  /** The seat's latest action, e.g. "CALL 100", "FOLD", "+1,200". */
+  act: string;
   isButton: boolean;
   isWinner: boolean;
-  /** Hand shown at showdown, e.g. "Full house". */
-  shownHand: string | null;
-  /** Action codes per betting street (preflop, flop, turn, river), e.g. "bC". */
-  strip: [string, string, string, string];
 }
 
 export interface Frame {
+  type: FrameType;
   street: Street;
   board: Card[];
   pot: number;
   seats: SeatFrame[];
-  /** Seat whose action produced this frame, highlighted on the table. */
+  /** Seat that acted in this step, highlighted on the table. */
   actor: number | null;
+  /** One-letter code for the actor's action strip (b X C B R A F). */
+  code: string | null;
+  /** Street name for the timeline header, on the step a street begins. */
+  tag: string | null;
+  /** Seats that won chips at the end. */
+  winners: number[];
   description: string;
-  /** Index into `hand.actions` this frame is after, if it is an action frame. */
-  actionIndex: number | null;
-  /** How long the actor took to decide, in microseconds (action frames only). */
+  /** How long the actor took to decide, in microseconds. */
   thinkUs: number | null;
   /** The actor's own notes on this action. */
   notes: string[];
 }
 
-const BOARD_SIZE: Record<Street, number> = {
-  preflop: 0,
-  flop: 3,
-  turn: 4,
-  river: 5,
-  showdown: 5,
+/** Pause after each kind of step, in units of the speed setting (from the reference site). */
+export const WAIT: Record<FrameType, number> = {
+  start: 2,
+  blind: 1,
+  deal: 2,
+  act: 1,
+  street: 3,
+  refund: 2,
+  show: 10,
 };
-
-const STREET_NAMES: Record<Street, string> = {
-  preflop: "Preflop",
-  flop: "Flop",
-  turn: "Turn",
-  river: "River",
-  showdown: "Showdown",
-};
-
-export const streetName = (street: Street) => STREET_NAMES[street];
 
 /** One-letter action codes used in the action strips. */
 export const ACTION_CODES = [
@@ -68,158 +68,194 @@ export const ACTION_CODES = [
   ["W", "WIN"],
 ] as const;
 
-const STRIP_INDEX: Record<Street, number> = {
+const BOARD_SIZE: Record<Street, number> = {
   preflop: 0,
-  flop: 1,
-  turn: 2,
-  river: 3,
-  showdown: 3,
+  flop: 3,
+  turn: 4,
+  river: 5,
+  showdown: 5,
 };
 
+export const streetName = (street: Street) => street.toUpperCase();
+
 export function buildFrames(hand: HandLog): Frame[] {
-  const nameOf = new Map(hand.seats.map((s) => [s.seat, s.name]));
-  const seats: SeatFrame[] = hand.seats.map((start) => {
-    const ante = Math.min(hand.blinds.ante, start.stack);
-    const stack = start.stack - start.posted;
-    return {
-      seat: start.seat,
-      name: start.name,
-      holeCards: start.hole_cards,
-      stack,
-      bet: start.posted - ante,
-      folded: false,
-      allIn: stack === 0,
-      lastAction: null,
-      isButton: start.seat === hand.button,
-      isWinner: false,
-      shownHand: null,
-      strip: [start.posted - ante > 0 ? "b" : "", "", "", ""],
-    };
-  });
+  const equityAt = new Map(
+    (hand.equity ?? []).map((e) => [e.street, new Map(e.seats.map((s) => [s.seat, s.equity]))]),
+  );
+
+  const seats: SeatFrame[] = hand.seats.map((start) => ({
+    seat: start.seat,
+    name: start.name,
+    label: `S${start.seat + 1} ${start.name}`,
+    holeCards: null,
+    stack: start.stack,
+    folded: false,
+    allIn: false,
+    equity: null,
+    act: "",
+    isButton: start.seat === hand.button,
+    isWinner: false,
+  }));
   const bySeat = new Map(seats.map((s) => [s.seat, s]));
+  const nameOf = (seat: number) => bySeat.get(seat)?.name ?? `S${seat + 1}`;
 
   let street: Street = "preflop";
-  let pot = hand.seats.reduce((sum, s) => sum + s.posted, 0);
-  let currentBet = Math.max(0, ...seats.map((s) => s.bet));
-
+  let boardShown = 0;
+  let pot = 0;
+  let currentBet = 0;
   const frames: Frame[] = [];
-  const snapshot = (
-    description: string,
-    actor: number | null,
-    actionIndex: number | null,
-    board = hand.board.slice(0, BOARD_SIZE[street]),
-  ) => {
+
+  const setEquity = () => {
+    const shares = equityAt.get(street);
+    for (const seat of seats) {
+      seat.equity = !seat.folded && seat.holeCards && shares ? (shares.get(seat.seat) ?? null) : null;
+    }
+  };
+
+  const push = (type: FrameType, description: string, extra: Partial<Frame> = {}) => {
     frames.push({
+      type,
       street,
-      board,
+      board: hand.board.slice(0, boardShown),
       pot,
-      seats: seats.map((s) => ({ ...s, strip: [...s.strip] as SeatFrame["strip"] })),
-      actor,
+      seats: seats.map((s) => ({ ...s })),
+      actor: null,
+      code: null,
+      tag: null,
+      winners: [],
       description,
-      actionIndex,
       thinkUs: null,
       notes: [],
+      ...extra,
     });
   };
 
-  snapshot(`Blinds ${chips(hand.blinds.small)}/${chips(hand.blinds.big)} posted`, null, null);
+  push("start", `HAND ${String(hand.hand_number).padStart(6, "0")}`);
 
-  const dealStreet = (next: Street) => {
+  // Antes go in silently; blinds are steps of their own, small blind first.
+  const antes = new Map(hand.seats.map((s) => [s.seat, Math.min(hand.blinds.ante, s.stack)]));
+  for (const seat of seats) {
+    const ante = antes.get(seat.seat) ?? 0;
+    seat.stack -= ante;
+    pot += ante;
+  }
+  const blinds = hand.seats
+    .map((s) => ({ seat: s.seat, amount: s.posted - (antes.get(s.seat) ?? 0) }))
+    .filter((b) => b.amount > 0)
+    .sort((a, b) => a.amount - b.amount);
+  blinds.forEach((blind, i) => {
+    const seat = bySeat.get(blind.seat)!;
+    const kind = blinds.length > 1 && i === 0 ? "SB" : "BB";
+    seat.stack -= blind.amount;
+    seat.allIn = seat.stack === 0;
+    seat.act = `${kind} ${chips(blind.amount)}`;
+    pot += blind.amount;
+    currentBet = Math.max(currentBet, blind.amount);
+    push("blind", `${seat.name} POSTS ${kind} ${chips(blind.amount)}`, { actor: seat.seat, code: "b" });
+  });
+
+  for (const start of hand.seats) {
+    bySeat.get(start.seat)!.holeCards = start.hole_cards;
+  }
+  setEquity();
+  push("deal", "CARDS DEALT", { tag: "PRE" });
+
+  const dealStreet = (next: Street, note = "") => {
     street = next;
+    boardShown = BOARD_SIZE[next];
     currentBet = 0;
-    for (const seat of seats) {
-      seat.bet = 0;
-      seat.lastAction = null;
-    }
-    snapshot(`${streetName(next)} dealt`, null, null);
+    for (const seat of seats) seat.act = seat.folded ? "FOLD" : "";
+    setEquity();
+    const cards = hand.board.slice(0, boardShown).map(cardText).join(" ");
+    push("street", `${streetName(next)}: ${cards}${note}`, { tag: streetName(next) });
   };
 
-  hand.actions.forEach((record, index) => {
+  hand.actions.forEach((record) => {
     if (record.street !== street) dealStreet(record.street);
 
     const seat = bySeat.get(record.seat);
     if (!seat) return;
     seat.stack -= record.amount;
-    seat.bet += record.amount;
     pot += record.amount;
 
-    let label: string;
-    let code: string;
     const action = record.action;
+    let act: string;
+    let code: string;
+    let said: string;
     if (action === "fold") {
       seat.folded = true;
-      label = "Fold";
-      code = "F";
+      seat.equity = null;
+      [act, code, said] = ["FOLD", "F", "FOLDS"];
     } else if (action === "check") {
-      label = "Check";
-      code = "X";
+      [act, code, said] = ["CHECK", "X", "CHECKS"];
     } else if (action === "call") {
-      label = `Call ${chips(record.amount)}`;
-      code = "C";
+      [act, code, said] = [`CALL ${chips(record.amount)}`, "C", `CALLS ${chips(record.amount)}`];
     } else {
-      const isBet = currentBet === 0;
-      label = `${isBet ? "Bet" : "Raise to"} ${chips(action.raise.to)}`;
-      code = isBet ? "B" : "R";
+      const to = chips(action.raise.to);
+      [act, code, said] =
+        currentBet === 0 ? [`BET ${to}`, "B", `BETS ${to}`] : [`RAISE TO ${to}`, "R", `RAISES TO ${to}`];
       currentBet = Math.max(currentBet, action.raise.to);
     }
     if (seat.stack === 0 && record.amount > 0) {
       seat.allIn = true;
-      label += " (all-in)";
+      const total = typeof action === "object" ? action.raise.to : record.amount;
+      act = `ALL-IN ${chips(total)}`;
       code = "A";
+      said = `GOES ALL-IN ${chips(total)}`;
     }
-    seat.lastAction = label;
-    seat.strip[STRIP_INDEX[street]] += code;
-
-    const rejected = record.rejected ? " (illegal move replaced)" : "";
-    snapshot(`${seat.name}: ${label}${rejected}`, seat.seat, index);
-    const frame = frames[frames.length - 1];
-    frame.thinkUs = record.think_us ?? null;
-    frame.notes = record.notes ?? [];
+    seat.act = act;
+    const replaced = record.rejected ? " (ILLEGAL MOVE REPLACED)" : "";
+    push("act", `${seat.name} ${said}${replaced}`, {
+      actor: seat.seat,
+      code,
+      thinkUs: record.think_us ?? null,
+      notes: record.notes ?? [],
+    });
   });
 
-  // Showdown and payout.
   const result = hand.result;
   if (result.shown.length > 0) {
-    if (hand.board.length > BOARD_SIZE[street]) {
-      for (const next of ["flop", "turn", "river"] as const) {
-        if (BOARD_SIZE[next] > BOARD_SIZE[street]) {
-          street = next;
-          snapshot(`${streetName(next)} dealt (all-in, no more betting)`, null, null);
-        }
+    for (const next of ["flop", "turn", "river"] as const) {
+      if (BOARD_SIZE[next] > BOARD_SIZE[street] && hand.board.length >= BOARD_SIZE[next]) {
+        dealStreet(next, " (ALL-IN, NO MORE BETTING)");
       }
     }
-    street = "showdown";
-    for (const shown of result.shown) {
-      const seat = bySeat.get(shown.seat);
-      if (seat) seat.shownHand = categoryLabel(shown.value.category);
-    }
   }
 
+  if (result.uncalled_bet) {
+    const { seat, amount } = result.uncalled_bet;
+    const s = bySeat.get(seat);
+    if (s) {
+      s.stack += amount;
+      s.act = `RETURNED ${chips(amount)}`;
+    }
+    pot -= amount;
+    push("refund", `${chips(amount)} UNCALLED, RETURNED TO ${nameOf(seat)}`, { actor: seat });
+  }
+
+  // Winnings: what each seat's stack gained over its stack before the payout.
+  const won = new Map<number, number>();
+  for (const seat of seats) {
+    const after = hand.final_stacks[seat.seat] ?? seat.stack;
+    if (after > seat.stack) won.set(seat.seat, after - seat.stack);
+  }
+  const winners = [...won.keys()];
   for (const seat of seats) {
     seat.stack = hand.final_stacks[seat.seat] ?? seat.stack;
-    seat.bet = 0;
-    seat.isWinner = result.awards.some((award) => award.winners.includes(seat.seat));
-    if (seat.isWinner) seat.strip[STRIP_INDEX[street]] += "W";
+    seat.isWinner = won.has(seat.seat);
+    if (seat.isWinner) seat.act = `+${chips(won.get(seat.seat)!)}`;
   }
-  const potTotal = result.awards.reduce((sum, award) => sum + award.amount, 0);
-  pot = 0;
-
-  const parts = result.awards.map((award, i) => {
-    const names = award.winners.map((seat) => nameOf.get(seat) ?? `Seat ${seat}`).join(" & ");
-    const potName = result.awards.length > 1 ? (i === 0 ? "main pot" : `side pot ${i}`) : "the pot";
-    const verb = award.winners.length > 1 ? "split" : "wins";
-    return `${names} ${verb} ${potName} (${chips(award.amount)})`;
-  });
-  if (result.uncalled_bet) {
-    const name = nameOf.get(result.uncalled_bet.seat);
-    parts.push(`${chips(result.uncalled_bet.amount)} uncalled returned to ${name}`);
-  }
-  snapshot(
-    parts.join("; ") || `Pot of ${chips(potTotal)} awarded`,
-    null,
-    null,
-    result.shown.length > 0 ? hand.board : hand.board.slice(0, BOARD_SIZE[street]),
-  );
+  const handName = (seat: number) => {
+    const shown = result.shown.find((h) => h.seat === seat);
+    return shown ? categoryLabel(shown.value.category).toUpperCase() : null;
+  };
+  const description = winners
+    .map((seat) => {
+      const name = handName(seat);
+      return `${nameOf(seat)} WINS ${chips(won.get(seat)!)}${name ? ` WITH ${name}` : ", UNCONTESTED"}`;
+    })
+    .join("; ");
+  push("show", description || "POT AWARDED", { tag: "SHOW", winners });
 
   return frames;
 }

@@ -158,6 +158,10 @@ export interface HandSummary {
   showdown: boolean;
   /** Chips each seat won (+) or lost (−) this hand, indexed by seat. */
   net: number[];
+  /** Seats that never folded, i.e. still in at the end. */
+  still_in: number[];
+  /** Community cards dealt (0, 3, 4 or 5). */
+  board_cards: number;
 }
 
 /** `logs/<match>/summary.json`; each hand is in `hands/<n>.json`. */

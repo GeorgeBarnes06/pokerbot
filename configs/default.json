@@ -7,6 +7,7 @@
   ],
   "max_hands": 10000,
   "rebuy": true,
+  "equity_samples": 100,
   "players": [
     { "name": "CFR-7", "bot": "cfr7" },
     { "name": "NASH", "bot": "nash" },

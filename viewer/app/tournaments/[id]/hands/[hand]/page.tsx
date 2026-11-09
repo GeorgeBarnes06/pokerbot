@@ -1,53 +1,46 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
-import { HandReplay } from "@/components/HandReplay";
+import { LiveTables } from "@/components/LiveTables";
 import { BracketLink, Divider, Exhibit } from "@/components/Sheet";
+import { gridData } from "@/lib/grid";
 import { loadHand, loadSummary } from "@/lib/logs";
 
-export default function HandPage({ params }: PageProps<"/tournaments/[id]/hands/[hand]">) {
+export default function HandPage({ params, searchParams }: PageProps<"/tournaments/[id]/hands/[hand]">) {
   return (
     <Suspense fallback={<p className="text-muted">LOADING HAND…</p>}>
-      {params.then(({ id, hand }) => (
-        <Hand id={id} handNumber={Number(hand)} />
+      {Promise.all([params, searchParams]).then(([{ id, hand }, query]) => (
+        <Hand id={id} handNumber={Number(hand)} autoplay={query.autoplay !== undefined} />
       ))}
     </Suspense>
   );
 }
 
-async function Hand({ id, handNumber }: { id: string; handNumber: number }) {
+async function Hand({ id, handNumber, autoplay }: { id: string; handNumber: number; autoplay: boolean }) {
   const [summary, hand] = await Promise.all([loadSummary(id), loadHand(id, handNumber)]);
   if (!summary || !hand) notFound();
-
-  const hasPrevious = handNumber > 1;
-  const hasNext = handNumber < summary.hands.length;
-  const nextHref = hasNext ? `/tournaments/${id}/hands/${handNumber + 1}` : null;
 
   return (
     <>
       <nav className="flex flex-wrap justify-between gap-x-4">
         <BracketLink href={`/tournaments/${id}`}>&lt; {id}</BracketLink>
-        <span className="flex gap-4">
-          {hasPrevious && (
-            <BracketLink href={`/tournaments/${id}/hands/${handNumber - 1}`}>&lt; Hand {handNumber - 1}</BracketLink>
-          )}
-          {nextHref && <BracketLink href={nextHref}>Hand {handNumber + 1} &gt;</BracketLink>}
-        </span>
       </nav>
 
       <Divider />
 
-      <Exhibit
-        label="C"
-        title="Hand replay"
-        aside={`${hand.seats.length} dealt in · seed ${hand.seed}`}
-      >
-        {/* Keyed so the replay restarts from step 1 when moving between hands. */}
-        <HandReplay
+      <Exhibit label="A" title="Live tables">
+        {/* Keyed so a fresh link to another hand starts a fresh replay. */}
+        <LiveTables
           key={`${id}-${handNumber}`}
-          hand={hand}
+          matchId={id}
+          totalHands={summary.hands.length}
           tableSize={summary.config.players.length}
-          nextHref={nextHref}
+          playerCount={summary.config.players.length}
+          handsPerSecond={summary.hands_per_second}
+          grid={gridData(summary)}
+          initialHand={hand}
+          autoplay={autoplay}
+          syncUrl
         />
       </Exhibit>
     </>

@@ -31,7 +31,7 @@ export interface MatchListing {
 
 async function readJson<T>(...parts: string[]): Promise<T | null> {
   try {
-    const text = await readFile(/*turbopackIgnore: true*/ path.join(LOGS_DIR, ...parts), "utf8");
+    const text = await readFile(path.join(/*turbopackIgnore: true*/ LOGS_DIR, ...parts), "utf8");
     return JSON.parse(text) as T;
   } catch {
     return null;

@@ -2,7 +2,7 @@
 //! tournament until one player has every chip.
 
 use std::cmp::Reverse;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bots::Bot;
 use engine::analysis::street_equities;
@@ -43,6 +43,10 @@ pub struct HandSummary {
     pub showdown: bool,
     /// Chips each seat won (+) or lost (−) this hand, indexed by seat.
     pub net: Vec<i64>,
+    /// Seats that never folded, i.e. still in at the end.
+    pub still_in: Vec<usize>,
+    /// Community cards dealt (0, 3, 4 or 5).
+    pub board_cards: usize,
 }
 
 impl HandSummary {
@@ -62,6 +66,18 @@ impl HandSummary {
             winners,
             showdown: !hand.result.shown.is_empty(),
             net: hand_net(hand),
+            still_in: hand
+                .seats
+                .iter()
+                .map(|s| s.seat)
+                .filter(|&seat| {
+                    !hand
+                        .actions
+                        .iter()
+                        .any(|a| a.seat == seat && a.action == engine::state::Action::Fold)
+                })
+                .collect(),
+            board_cards: hand.board.len(),
         }
     }
 }
@@ -82,7 +98,7 @@ pub struct MatchSummary {
     /// False if an elimination tournament hit `max_hands` with several players left.
     pub finished: bool,
     pub standings: Vec<Standing>,
-    /// Wall-clock time for the whole match, including every bot's thinking.
+    /// Time spent playing the hands (engine and bots), excluding equity analysis.
     pub elapsed_ms: u64,
     pub hands_per_second: f64,
     pub hands: Vec<HandSummary>,
@@ -125,7 +141,8 @@ pub fn run(config: &TournamentConfig, bots: &mut [Box<dyn Bot>]) -> TournamentLo
     let last_seat = config.players.len() - 1;
     let mut state = GameState::new(players, last_seat, config.blind_levels[0]);
     let mut rng = StdRng::seed_from_u64(config.seed);
-    let started = Instant::now();
+    // Time spent playing (engine and bots), not recording equity for the figures.
+    let mut playing = Duration::ZERO;
 
     let mut hands = Vec::new();
     let mut rebuys = vec![0u64; config.players.len()];
@@ -149,11 +166,13 @@ pub fn run(config: &TournamentConfig, bots: &mut [Box<dyn Bot>]) -> TournamentLo
 
         // 53-bit seeds stay exact when the viewer parses the log as JavaScript numbers.
         let seed = rng.gen::<u64>() >> 11;
+        let hand_started = Instant::now();
         let mut log = state.play_hand(seed, |view| {
             let mut notes = Vec::new();
             let action = bots[view.seat].decide(view, &mut notes);
             Decision { action, notes }
         });
+        playing += hand_started.elapsed();
         if config.equity_samples > 0 {
             log.equity = street_equities(&log, config.equity_samples, seed);
         }
@@ -184,7 +203,7 @@ pub fn run(config: &TournamentConfig, bots: &mut [Box<dyn Bot>]) -> TournamentLo
         config: config.clone(),
         finished,
         standings: standings(config, &state, &rebuys, &net, &eliminated),
-        elapsed_ms: started.elapsed().as_millis() as u64,
+        elapsed_ms: playing.as_millis() as u64,
         hands,
     }
 }
@@ -412,6 +431,10 @@ mod tests {
         assert_eq!(first.hand_number, 1);
         assert!(first.pot > 0);
         assert!(!first.winners.is_empty());
+        for (hand, full) in summary.hands.iter().zip(&log.hands) {
+            assert_eq!(hand.board_cards, full.board.len());
+            assert!(hand.winners.iter().all(|w| hand.still_in.contains(w)));
+        }
     }
 
     #[test]
