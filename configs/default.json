@@ -8,13 +8,13 @@
   "max_hands": 10000,
   "rebuy": true,
   "players": [
-    { "name": "Seat 1", "bot": "check_call" },
-    { "name": "Seat 2", "bot": "check_call" },
-    { "name": "Seat 3", "bot": "check_call" },
-    { "name": "Seat 4", "bot": "check_call" },
-    { "name": "Seat 5", "bot": "check_call" },
-    { "name": "Seat 6", "bot": "check_call" },
-    { "name": "Seat 7", "bot": "check_call" },
-    { "name": "Seat 8", "bot": "check_call" }
+    { "name": "CFR-7", "bot": "cfr7" },
+    { "name": "NASH", "bot": "nash" },
+    { "name": "MONTE", "bot": "monte" },
+    { "name": "TILT", "bot": "tilt" },
+    { "name": "GTO-LITE", "bot": "gto_lite" },
+    { "name": "RIVERRAT", "bot": "riverrat" },
+    { "name": "FOLDBOT", "bot": "foldbot" },
+    { "name": "BAYES", "bot": "bayes" }
   ]
 }

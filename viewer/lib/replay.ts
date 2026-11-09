@@ -32,6 +32,10 @@ export interface Frame {
   description: string;
   /** Index into `hand.actions` this frame is after, if it is an action frame. */
   actionIndex: number | null;
+  /** How long the actor took to decide, in microseconds (action frames only). */
+  thinkUs: number | null;
+  /** The actor's own notes on this action. */
+  notes: string[];
 }
 
 const BOARD_SIZE: Record<Street, number> = {
@@ -113,6 +117,8 @@ export function buildFrames(hand: HandLog): Frame[] {
       actor,
       description,
       actionIndex,
+      thinkUs: null,
+      notes: [],
     });
   };
 
@@ -166,6 +172,9 @@ export function buildFrames(hand: HandLog): Frame[] {
 
     const rejected = record.rejected ? " (illegal move replaced)" : "";
     snapshot(`${seat.name}: ${label}${rejected}`, seat.seat, index);
+    const frame = frames[frames.length - 1];
+    frame.thinkUs = record.think_us ?? null;
+    frame.notes = record.notes ?? [];
   });
 
   // Showdown and payout.

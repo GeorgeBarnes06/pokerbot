@@ -1,13 +1,13 @@
 //! Tournament configuration, loaded from JSON.
 
-use bots::{Bot, CheckCall};
+use bots::Bot;
 use engine::state::{Blinds, Chips};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PlayerConfig {
     pub name: String,
-    /// Which strategy plays this seat, e.g. `"check_call"`.
+    /// Which model plays this seat: one of `bots::MODELS` (e.g. `"cfr7"`) or `"check_call"`.
     pub bot: String,
 }
 
@@ -28,6 +28,14 @@ pub struct TournamentConfig {
     /// Without rebuys, players bust out until one has every chip.
     #[serde(default)]
     pub rebuy: bool,
+    /// Heads-up duel format: every stack goes back to `starting_stack` before each
+    /// hand, so each hand is scored on its own.
+    #[serde(default)]
+    pub reset_stacks_each_hand: bool,
+    /// Random run-outs per street for the equity figures (0 = don't record).
+    /// Costs time: a few hundred is plenty for heads-up; leave at 0 for long 8-bot runs.
+    #[serde(default)]
+    pub equity_samples: u32,
     /// One entry per seat, in seat order.
     pub players: Vec<PlayerConfig>,
 }
@@ -52,10 +60,22 @@ impl TournamentConfig {
         if self.hands_per_level == 0 || self.max_hands == 0 || self.starting_stack == 0 {
             return Err("hands_per_level, max_hands and starting_stack must be positive".into());
         }
-        for player in &self.players {
-            make_bot(&player.bot)?;
+        for (seat, player) in self.players.iter().enumerate() {
+            make_bot(&player.bot, self.bot_seed(seat))?;
         }
         Ok(())
+    }
+
+    /// Scored by chips won rather than finishing place.
+    pub fn is_cash(&self) -> bool {
+        self.rebuy || self.reset_stacks_each_hand
+    }
+
+    /// Each seat's bot gets its own seed, derived from the match seed.
+    pub fn bot_seed(&self, seat: usize) -> u64 {
+        self.seed
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(seat as u64 + 1)
     }
 
     /// The blinds in force for hand number `hand_number` (1-based).
@@ -66,11 +86,11 @@ impl TournamentConfig {
 }
 
 /// Builds the bot named in a config file.
-pub fn make_bot(kind: &str) -> Result<Box<dyn Bot>, String> {
-    match kind {
-        "check_call" => Ok(Box::new(CheckCall)),
-        other => Err(format!("unknown bot {other:?}")),
-    }
+pub fn make_bot(kind: &str, seed: u64) -> Result<Box<dyn Bot>, String> {
+    bots::create(kind, seed).ok_or_else(|| {
+        let known: Vec<&str> = bots::MODELS.iter().map(|(name, _)| *name).collect();
+        format!("unknown bot {kind:?} (known: {}, check_call)", known.join(", "))
+    })
 }
 
 #[cfg(test)]

@@ -38,7 +38,8 @@ fn run(config_path: &Path) -> Result<(), String> {
     let mut bots = config
         .players
         .iter()
-        .map(|p| make_bot(&p.bot))
+        .enumerate()
+        .map(|(seat, p)| make_bot(&p.bot, config.bot_seed(seat)))
         .collect::<Result<Vec<_>, _>>()?;
     let log = tournament::run(&config, &mut bots);
 
@@ -50,9 +51,15 @@ fn run(config_path: &Path) -> Result<(), String> {
     write_log(&out, &log)?;
 
     let status = if log.finished { "finished" } else { "stopped at max_hands" };
-    println!("{} hands played ({status})", log.hands.len());
+    let summary = log.summary();
+    println!(
+        "{} hands played ({status}) in {:.1}s, {:.0} hands/sec",
+        log.hands.len(),
+        log.elapsed_ms as f64 / 1000.0,
+        summary.hands_per_second
+    );
     for standing in &log.standings {
-        let result = if config.rebuy {
+        let result = if config.is_cash() {
             format!(
                 "{:+} chips ({:+.1} BB/100, {} rebuys)",
                 standing.net_chips, standing.bb_per_100, standing.rebuys

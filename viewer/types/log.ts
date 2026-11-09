@@ -42,6 +42,16 @@ export interface ActionRecord {
   amount: number;
   /** What the bot asked for, when it was illegal and replaced. */
   rejected?: Action;
+  /** How long the bot took to decide, in microseconds. */
+  think_us: number;
+  /** The bot's own explanation of this action, if it gave one. */
+  notes?: string[];
+}
+
+/** Each live player's share of the pot at the start of a street, every hand known. */
+export interface StreetEquity {
+  street: Street;
+  seats: { seat: number; equity: number }[];
 }
 
 export interface SeatStart {
@@ -102,6 +112,8 @@ export interface HandLog {
   result: HandResult;
   /** Every seat's stack after the payout, indexed by seat. */
   final_stacks: number[];
+  /** Present when the match was run with `equity_samples` > 0. */
+  equity?: StreetEquity[];
 }
 
 export interface PlayerConfig {
@@ -117,6 +129,10 @@ export interface TournamentConfig {
   max_hands: number;
   /** Cash format: short stacks are topped back up and nobody is eliminated. */
   rebuy: boolean;
+  /** Duel format: every stack goes back to the start before each hand. */
+  reset_stacks_each_hand: boolean;
+  /** Random run-outs per street used for `HandLog.equity` (0 = not recorded). */
+  equity_samples: number;
   players: PlayerConfig[];
 }
 
@@ -140,6 +156,8 @@ export interface HandSummary {
   pot: number;
   winners: number[];
   showdown: boolean;
+  /** Chips each seat won (+) or lost (−) this hand, indexed by seat. */
+  net: number[];
 }
 
 /** `logs/<match>/summary.json`; each hand is in `hands/<n>.json`. */
@@ -147,5 +165,7 @@ export interface MatchSummary {
   config: TournamentConfig;
   finished: boolean;
   standings: Standing[];
+  elapsed_ms: number;
+  hands_per_second: number;
   hands: HandSummary[];
 }

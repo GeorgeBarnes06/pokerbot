@@ -9,3 +9,4 @@ pub mod pot;
 pub mod log;
 pub mod view;
 pub mod hand;
+pub mod analysis;

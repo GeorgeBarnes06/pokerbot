@@ -25,6 +25,7 @@ async function Match({ id, page }: { id: string; page: number }) {
 
   const { config } = summary;
   const blinds = config.blind_levels[0];
+  const cash = config.rebuy || config.reset_stacks_each_hand;
   const fixedBlinds = config.blind_levels.length === 1;
   const showdowns = summary.hands.filter((h) => h.showdown).length;
 
@@ -38,13 +39,19 @@ async function Match({ id, page }: { id: string; page: number }) {
         <p className="uppercase">
           {config.players.length} bots, no-limit hold&apos;em, blinds {chips(blinds.small)}/
           {chips(blinds.big)}
-          {fixedBlinds ? "" : " rising"}, {config.rebuy ? "rebuys" : "elimination"}
+          {fixedBlinds ? "" : " rising"},{" "}
+          {config.reset_stacks_each_hand
+            ? `stacks reset to ${chips(config.starting_stack)} every hand`
+            : config.rebuy
+              ? "rebuys"
+              : "elimination"}
         </p>
         <div className="flex flex-wrap gap-x-6">
           <Stat label="SEED" value={config.seed} />
           <Stat label="STACKS" value={chips(config.starting_stack)} />
           <Stat label="HANDS" value={chips(summary.hands.length)} />
           <Stat label="SHOWDOWNS" value={chips(showdowns)} />
+          <Stat label="HANDS/SEC" value={chips(Math.round(summary.hands_per_second))} />
           {!summary.finished && <span className="text-amber">STOPPED AT HAND LIMIT</span>}
         </div>
       </div>
@@ -53,8 +60,8 @@ async function Match({ id, page }: { id: string; page: number }) {
 
       <Exhibit
         label="A"
-        title={config.rebuy ? "Leaderboard" : "Final standings"}
-        aside={config.rebuy ? "ranked by net chips" : "ranked by finish"}
+        title={cash ? "Leaderboard" : "Final standings"}
+        aside={cash ? "ranked by net chips" : "ranked by finish"}
       >
         <Standings summary={summary} id={id} />
       </Exhibit>
@@ -69,7 +76,7 @@ async function Match({ id, page }: { id: string; page: number }) {
 }
 
 function Standings({ summary, id }: { summary: MatchSummary; id: string }) {
-  const rebuy = summary.config.rebuy;
+  const rebuy = summary.config.rebuy || summary.config.reset_stacks_each_hand;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left">

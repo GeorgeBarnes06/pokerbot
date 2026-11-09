@@ -2,8 +2,11 @@
 //! tournament until one player has every chip.
 
 use std::cmp::Reverse;
+use std::time::Instant;
 
 use bots::Bot;
+use engine::analysis::street_equities;
+use engine::hand::Decision;
 use engine::log::HandLog;
 use engine::state::{Blinds, Chips, GameState, Player, PlayerStatus};
 use rand::rngs::StdRng;
@@ -22,7 +25,7 @@ pub struct Standing {
     pub final_stack: Chips,
     /// Times this player was topped back up to the starting stack.
     pub rebuys: u64,
-    /// Chips won or lost overall: final stack minus the starting stack and every top-up.
+    /// Chips won or lost overall, summed hand by hand (top-ups and resets don't count).
     pub net_chips: i64,
     /// Net chips in big blinds per 100 hands, using the first level's big blind.
     pub bb_per_100: f64,
@@ -38,6 +41,8 @@ pub struct HandSummary {
     pub pot: Chips,
     pub winners: Vec<usize>,
     pub showdown: bool,
+    /// Chips each seat won (+) or lost (−) this hand, indexed by seat.
+    pub net: Vec<i64>,
 }
 
 impl HandSummary {
@@ -56,8 +61,18 @@ impl HandSummary {
             pot: hand.result.awards.iter().map(|award| award.amount).sum(),
             winners,
             showdown: !hand.result.shown.is_empty(),
+            net: hand_net(hand),
         }
     }
+}
+
+/// Chips each seat won or lost in one hand, indexed by seat (0 if not dealt in).
+fn hand_net(hand: &HandLog) -> Vec<i64> {
+    let mut net = vec![0; hand.final_stacks.len()];
+    for start in &hand.seats {
+        net[start.seat] = hand.final_stacks[start.seat] as i64 - start.stack as i64;
+    }
+    net
 }
 
 /// Everything about a match except the individual hands.
@@ -67,6 +82,9 @@ pub struct MatchSummary {
     /// False if an elimination tournament hit `max_hands` with several players left.
     pub finished: bool,
     pub standings: Vec<Standing>,
+    /// Wall-clock time for the whole match, including every bot's thinking.
+    pub elapsed_ms: u64,
+    pub hands_per_second: f64,
     pub hands: Vec<HandSummary>,
 }
 
@@ -76,6 +94,7 @@ pub struct TournamentLog {
     pub config: TournamentConfig,
     pub finished: bool,
     pub standings: Vec<Standing>,
+    pub elapsed_ms: u64,
     pub hands: Vec<HandLog>,
 }
 
@@ -85,6 +104,8 @@ impl TournamentLog {
             config: self.config.clone(),
             finished: self.finished,
             standings: self.standings.clone(),
+            elapsed_ms: self.elapsed_ms,
+            hands_per_second: self.hands.len() as f64 / (self.elapsed_ms.max(1) as f64 / 1000.0),
             hands: self.hands.iter().map(HandSummary::of).collect(),
         }
     }
@@ -104,36 +125,47 @@ pub fn run(config: &TournamentConfig, bots: &mut [Box<dyn Bot>]) -> TournamentLo
     let last_seat = config.players.len() - 1;
     let mut state = GameState::new(players, last_seat, config.blind_levels[0]);
     let mut rng = StdRng::seed_from_u64(config.seed);
+    let started = Instant::now();
 
     let mut hands = Vec::new();
     let mut rebuys = vec![0u64; config.players.len()];
-    // Chips each seat has put on the table: the first stack plus every top-up.
-    let mut bought_in = vec![config.starting_stack; config.players.len()];
+    // Chips won or lost so far, summed hand by hand, so top-ups and resets don't count.
+    let mut net = vec![0i64; config.players.len()];
     // Busted seats in the order they went out, with the hand number.
     let mut eliminated: Vec<(usize, u64)> = Vec::new();
 
-    while state.hand_number < config.max_hands && (config.rebuy || live_players(&state) >= 2) {
+    while state.hand_number < config.max_hands && (config.is_cash() || live_players(&state) >= 2) {
         state.blinds = config.blinds_for_hand(state.hand_number + 1);
-        if config.rebuy {
-            for player in &mut state.players {
-                if player.stack < state.blinds.big {
-                    bought_in[player.seat] += config.starting_stack - player.stack;
-                    player.stack = config.starting_stack;
-                    player.status = PlayerStatus::Active;
-                    rebuys[player.seat] += 1;
-                }
+        for player in &mut state.players {
+            if config.reset_stacks_each_hand {
+                player.stack = config.starting_stack;
+                player.status = PlayerStatus::Active;
+            } else if config.rebuy && player.stack < state.blinds.big {
+                player.stack = config.starting_stack;
+                player.status = PlayerStatus::Active;
+                rebuys[player.seat] += 1;
             }
         }
 
         // 53-bit seeds stay exact when the viewer parses the log as JavaScript numbers.
         let seed = rng.gen::<u64>() >> 11;
-        let log = state.play_hand(seed, |view| bots[view.seat].decide(view));
+        let mut log = state.play_hand(seed, |view| {
+            let mut notes = Vec::new();
+            let action = bots[view.seat].decide(view, &mut notes);
+            Decision { action, notes }
+        });
+        if config.equity_samples > 0 {
+            log.equity = street_equities(&log, config.equity_samples, seed);
+        }
+        for (seat, chips) in hand_net(&log).into_iter().enumerate() {
+            net[seat] += chips;
+        }
 
         for (seat, bot) in bots.iter_mut().enumerate() {
             bot.observe(&log.redacted_for(seat));
         }
 
-        if !config.rebuy {
+        if !config.is_cash() {
             // Players busting on the same hand: the one who started with fewer chips places lower.
             let mut busted: Vec<_> = log
                 .seats
@@ -147,11 +179,12 @@ pub fn run(config: &TournamentConfig, bots: &mut [Box<dyn Bot>]) -> TournamentLo
         hands.push(log);
     }
 
-    let finished = config.rebuy || live_players(&state) < 2;
+    let finished = config.is_cash() || live_players(&state) < 2;
     TournamentLog {
         config: config.clone(),
         finished,
-        standings: standings(config, &state, &rebuys, &bought_in, &eliminated),
+        standings: standings(config, &state, &rebuys, &net, &eliminated),
+        elapsed_ms: started.elapsed().as_millis() as u64,
         hands,
     }
 }
@@ -164,15 +197,13 @@ fn standings(
     config: &TournamentConfig,
     state: &GameState,
     rebuys: &[u64],
-    bought_in: &[Chips],
+    net: &[i64],
     eliminated: &[(usize, u64)],
 ) -> Vec<Standing> {
-    let net = |seat: usize| state.players[seat].stack as i64 - bought_in[seat] as i64;
-
-    let order: Vec<(usize, Option<u64>)> = if config.rebuy {
+    let order: Vec<(usize, Option<u64>)> = if config.is_cash() {
         // Cash format: rank by chips won.
         let mut seats: Vec<usize> = (0..state.players.len()).collect();
-        seats.sort_by_key(|&seat| Reverse(net(seat)));
+        seats.sort_by_key(|&seat| Reverse(net[seat]));
         seats.into_iter().map(|seat| (seat, None)).collect()
     } else {
         // Elimination: survivors by chips, then busted players, last out first.
@@ -197,8 +228,8 @@ fn standings(
             bot: config.players[seat].bot.clone(),
             final_stack: state.players[seat].stack,
             rebuys: rebuys[seat],
-            net_chips: net(seat),
-            bb_per_100: net(seat) as f64 / big_blind / hands * 100.0,
+            net_chips: net[seat],
+            bb_per_100: net[seat] as f64 / big_blind / hands * 100.0,
             busted_on_hand,
         })
         .collect()
@@ -217,7 +248,8 @@ mod tests {
     struct Shove;
 
     impl Bot for Shove {
-        fn decide(&mut self, view: &PlayerView) -> Action {
+        fn decide(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
+            notes.push("shove".into());
             match view.legal.raise_range {
                 Some((_, max)) => Action::Raise { to: max },
                 None => Action::Call,
@@ -236,6 +268,8 @@ mod tests {
             ],
             max_hands: 2000,
             rebuy: false,
+            reset_stacks_each_hand: false,
+            equity_samples: 0,
             players: (0..players)
                 .map(|i| PlayerConfig {
                     name: format!("P{i}"),
@@ -385,6 +419,62 @@ mod tests {
         let first = run(&config(6, 42), &mut shovers(6));
         let second = run(&config(6, 42), &mut shovers(6));
 
-        assert_eq!(first, second);
+        // Everything but timing must match.
+        assert_eq!(first.standings, second.standings);
+        assert_eq!(first.hands.len(), second.hands.len());
+        for (a, b) in first.hands.iter().zip(&second.hands) {
+            assert_eq!(a.seats, b.seats);
+            assert_eq!(a.board, b.board);
+            assert_eq!(a.final_stacks, b.final_stacks);
+            let actions = |h: &engine::log::HandLog| h.actions.iter().map(|r| (r.seat, r.action)).collect::<Vec<_>>();
+            assert_eq!(actions(a), actions(b));
+        }
+    }
+
+    #[test]
+    fn duel_resets_stacks_every_hand_and_net_chips_balance() {
+        let mut config = config(2, 8);
+        config.reset_stacks_each_hand = true;
+        config.max_hands = 50;
+        let log = run(&config, &mut shovers(2));
+
+        assert_eq!(log.hands.len(), 50);
+        assert!(log.hands.iter().all(|h| h.seats.iter().all(|s| s.stack == 500)));
+        assert_eq!(log.standings.iter().map(|s| s.net_chips).sum::<i64>(), 0);
+        assert!(log.standings.iter().all(|s| s.rebuys == 0));
+    }
+
+    #[test]
+    fn hand_summaries_record_each_seats_net_chips() {
+        let log = run(&config(4, 2), &mut shovers(4));
+        let summary = log.summary();
+
+        let mut totals = [0i64; 4];
+        for hand in &summary.hands {
+            assert_eq!(hand.net.iter().sum::<i64>(), 0, "hand {}", hand.hand_number);
+            for (seat, chips) in hand.net.iter().enumerate() {
+                totals[seat] += chips;
+            }
+        }
+        for standing in &summary.standings {
+            assert_eq!(totals[standing.seat], standing.net_chips);
+        }
+        assert!(summary.hands_per_second > 0.0);
+    }
+
+    #[test]
+    fn equity_and_notes_are_recorded_when_asked() {
+        let mut config = config(2, 4);
+        config.reset_stacks_each_hand = true;
+        config.max_hands = 5;
+        config.equity_samples = 100;
+        let log = run(&config, &mut shovers(2));
+
+        assert!(log.hands.iter().all(|h| !h.equity.is_empty()));
+        assert!(log.hands[0].actions.iter().all(|a| a.notes == ["shove"]));
+        // Bots never see each other's notes or the equity.
+        let redacted = log.hands[0].redacted_for(0);
+        assert!(redacted.equity.is_empty());
+        assert!(redacted.actions.iter().filter(|a| a.seat == 1).all(|a| a.notes.is_empty()));
     }
 }

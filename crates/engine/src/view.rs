@@ -36,7 +36,7 @@ pub struct PlayerView {
     pub to_call: Chips,
     pub legal: LegalActions,
     pub seats: Vec<SeatView>,
-    /// Every action taken so far this hand, in order.
+    /// Every action taken so far this hand, in order. Other players' notes are removed.
     pub history: Vec<ActionRecord>,
 }
 
@@ -73,7 +73,13 @@ impl GameState {
                     hand_contribution: p.hand_contribution,
                 })
                 .collect(),
-            history: history.to_vec(),
+            history: history
+                .iter()
+                .map(|record| ActionRecord {
+                    notes: if record.seat == seat { record.notes.clone() } else { Vec::new() },
+                    ..record.clone()
+                })
+                .collect(),
         })
     }
 }

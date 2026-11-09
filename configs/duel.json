@@ -1,0 +1,15 @@
+{
+  "seed": 1,
+  "starting_stack": 10000,
+  "hands_per_level": 10000,
+  "blind_levels": [
+    { "small": 50, "big": 100, "ante": 0 }
+  ],
+  "max_hands": 10000,
+  "reset_stacks_each_hand": true,
+  "equity_samples": 200,
+  "players": [
+    { "name": "CFR-7", "bot": "cfr7" },
+    { "name": "MONTE", "bot": "monte" }
+  ]
+}

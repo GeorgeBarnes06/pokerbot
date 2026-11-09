@@ -159,10 +159,20 @@ export function HandReplay({ hand, tableSize, nextHref }: Props) {
         </div>
       </div>
 
-      <p className="min-h-[1.8em] border-y border-faint py-1">
-        <span className="text-muted">&gt; </span>
-        {frame.description}
-      </p>
+      <div className="min-h-[1.8em] border-y border-faint py-1">
+        <p>
+          <span className="text-muted">&gt; </span>
+          {frame.description}
+          {frame.thinkUs !== null && (
+            <span className="text-muted"> · {formatThink(frame.thinkUs)}</span>
+          )}
+        </p>
+        {frame.notes.map((note, i) => (
+          <p key={i} className="pl-[2ch] text-muted">
+            {note}
+          </p>
+        ))}
+      </div>
 
       <ActionStrips seats={frame.seats} />
 
@@ -283,6 +293,10 @@ function ActionStrips({ seats }: { seats: SeatFrame[] }) {
       </table>
     </div>
   );
+}
+
+function formatThink(us: number): string {
+  return us >= 1000 ? `${(us / 1000).toFixed(1)} MS` : `${us} µS`;
 }
 
 function codeColor(code: string): string {

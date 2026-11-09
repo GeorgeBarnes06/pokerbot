@@ -48,7 +48,7 @@ async function MatchList() {
                   [{m.id.toUpperCase()}]
                 </Link>
               </td>
-              <td className="pr-6">{m.rebuy ? "CASH" : "ELIMINATION"}</td>
+              <td className="pr-6">{m.format}</td>
               <td className="pr-6 tabular-nums">{m.seed}</td>
               <td className="pr-6 tabular-nums">{m.players}</td>
               <td className="pr-6 text-right tabular-nums">{chips(m.hands)}</td>

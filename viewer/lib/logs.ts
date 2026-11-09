@@ -22,6 +22,8 @@ export interface MatchListing {
   seed: number;
   players: number;
   hands: number;
+  /** "DUEL" (stacks reset each hand), "CASH" (rebuys) or "ELIMINATION". */
+  format: string;
   rebuy: boolean;
   finished: boolean;
   leader: string | null;
@@ -66,7 +68,12 @@ export async function listMatches(): Promise<MatchListing[]> {
           seed: summary.config.seed,
           players: summary.config.players.length,
           hands: summary.hands.length,
-          rebuy: summary.config.rebuy,
+          format: summary.config.reset_stacks_each_hand
+            ? "DUEL"
+            : summary.config.rebuy
+              ? "CASH"
+              : "ELIMINATION",
+          rebuy: summary.config.rebuy || summary.config.reset_stacks_each_hand,
           finished: summary.finished,
           leader: summary.standings[0]?.name ?? null,
         };

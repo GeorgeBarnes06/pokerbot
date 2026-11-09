@@ -1,19 +1,42 @@
 //! Playing a complete hand from the deal to the payout.
 
+use std::time::Instant;
+
 use crate::log::{ActionRecord, HandLog, SeatStart};
 use crate::state::{Action, GameState, PlayerStatus};
 use crate::view::PlayerView;
 
+/// A player's choice, with optional notes explaining it (shown in replays,
+/// hidden from other players).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Decision {
+    pub action: Action,
+    pub notes: Vec<String>,
+}
+
+impl From<Action> for Decision {
+    fn from(action: Action) -> Self {
+        Decision {
+            action,
+            notes: Vec::new(),
+        }
+    }
+}
+
 impl GameState {
     /// Plays one full hand, asking `decide` for every action, and returns its log.
     ///
-    /// An illegal decision is replaced with a check if one is allowed, otherwise a
-    /// fold, and recorded as rejected.
+    /// Each decision is timed. An illegal decision is replaced with a check if one
+    /// is allowed, otherwise a fold, and recorded as rejected.
     ///
     /// # Panics
     ///
     /// If fewer than two players have chips.
-    pub fn play_hand(&mut self, seed: u64, mut decide: impl FnMut(&PlayerView) -> Action) -> HandLog {
+    pub fn play_hand<D: Into<Decision>>(
+        &mut self,
+        seed: u64,
+        mut decide: impl FnMut(&PlayerView) -> D,
+    ) -> HandLog {
         self.start_hand(seed);
 
         let seats = self
@@ -36,7 +59,11 @@ impl GameState {
             let street = self.street;
             let stack_before = self.players[seat].stack;
 
-            let requested = decide(&view);
+            let started = Instant::now();
+            let decision: Decision = decide(&view).into();
+            let think_us = started.elapsed().as_micros() as u64;
+
+            let requested = decision.action;
             let (action, rejected) = match self.apply_action(requested) {
                 Ok(()) => (requested, None),
                 Err(_) => {
@@ -57,6 +84,8 @@ impl GameState {
                 action,
                 amount: stack_before - self.players[seat].stack,
                 rejected,
+                think_us,
+                notes: decision.notes,
             });
         }
 
@@ -73,6 +102,7 @@ impl GameState {
             board,
             result,
             final_stacks: self.players.iter().map(|p| p.stack).collect(),
+            equity: Vec::new(),
         }
     }
 }
@@ -141,7 +171,7 @@ mod tests {
         let mut state = table(3);
         let log = state.play_hand(5, |_| Action::Raise { to: 1 });
 
-        let first = log.actions[0];
+        let first = &log.actions[0];
         assert_eq!(first.action, Action::Fold);
         assert_eq!(first.rejected, Some(Action::Raise { to: 1 }));
         // Everyone folds to the big blind, who wins without showing.
