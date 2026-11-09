@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::card::Card;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HandCategory {
     HighCard,
     OnePair,

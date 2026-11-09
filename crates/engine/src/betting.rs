@@ -1,5 +1,7 @@
 //! Betting-round state machine.
 
+use serde::{Deserialize, Serialize};
+
 use crate::state::{Action, Chips, GameState, PlayerStatus, Street};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,7 +22,7 @@ pub enum ActionError {
 }
 
 /// What the player to act may do.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LegalActions {
     pub can_check: bool,
     /// Chips a call would put in, capped at the player's stack; `None` if there is nothing to call.

@@ -118,6 +118,8 @@ dependencies = [
  "bots",
  "engine",
  "rand",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
