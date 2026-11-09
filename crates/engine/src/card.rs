@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -70,9 +72,62 @@ impl Suit {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ParseCardError;
+
+impl FromStr for Card {
+    type Err = ParseCardError;
+
+    /// Parses short notation like "As" (ace of spades) or "Td" (ten of diamonds).
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let mut chars = text.chars();
+        let rank = match chars.next().ok_or(ParseCardError)? {
+            '2' => Rank::Two,
+            '3' => Rank::Three,
+            '4' => Rank::Four,
+            '5' => Rank::Five,
+            '6' => Rank::Six,
+            '7' => Rank::Seven,
+            '8' => Rank::Eight,
+            '9' => Rank::Nine,
+            'T' => Rank::Ten,
+            'J' => Rank::Jack,
+            'Q' => Rank::Queen,
+            'K' => Rank::King,
+            'A' => Rank::Ace,
+            _ => return Err(ParseCardError),
+        };
+        let suit = match chars.next().ok_or(ParseCardError)? {
+            'c' => Suit::Clubs,
+            'd' => Suit::Diamonds,
+            'h' => Suit::Hearts,
+            's' => Suit::Spades,
+            _ => return Err(ParseCardError),
+        };
+        if chars.next().is_some() {
+            return Err(ParseCardError);
+        }
+        Ok(Card::new(rank, suit))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Card, Rank, Suit};
+    use super::{Card, ParseCardError, Rank, Suit};
+
+    #[test]
+    fn parses_short_card_notation() {
+        assert_eq!("As".parse(), Ok(Card::new(Rank::Ace, Suit::Spades)));
+        assert_eq!("Td".parse(), Ok(Card::new(Rank::Ten, Suit::Diamonds)));
+        assert_eq!("2c".parse(), Ok(Card::new(Rank::Two, Suit::Clubs)));
+    }
+
+    #[test]
+    fn rejects_malformed_card_notation() {
+        for text in ["", "A", "1s", "Ax", "as", "Ass"] {
+            assert_eq!(text.parse::<Card>(), Err(ParseCardError), "{text:?}");
+        }
+    }
 
     #[test]
     fn rank_values_are_in_ascending_order() {

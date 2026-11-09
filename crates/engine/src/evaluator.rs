@@ -119,35 +119,10 @@ fn classify_five(cards: [Card; 5]) -> HandValue {
 #[cfg(test)]
 mod tests {
     use super::{classify_five, evaluate, HandCategory, HandValue};
-    use crate::card::{Card, Rank, Suit};
+    use crate::card::Card;
 
-    /// Parses short notation like "As" or "Td" into a card.
     fn card(text: &str) -> Card {
-        let mut chars = text.chars();
-        let rank = match chars.next().unwrap() {
-            '2' => Rank::Two,
-            '3' => Rank::Three,
-            '4' => Rank::Four,
-            '5' => Rank::Five,
-            '6' => Rank::Six,
-            '7' => Rank::Seven,
-            '8' => Rank::Eight,
-            '9' => Rank::Nine,
-            'T' => Rank::Ten,
-            'J' => Rank::Jack,
-            'Q' => Rank::Queen,
-            'K' => Rank::King,
-            'A' => Rank::Ace,
-            other => panic!("unknown rank {other}"),
-        };
-        let suit = match chars.next().unwrap() {
-            'c' => Suit::Clubs,
-            'd' => Suit::Diamonds,
-            'h' => Suit::Hearts,
-            's' => Suit::Spades,
-            other => panic!("unknown suit {other}"),
-        };
-        Card::new(rank, suit)
+        text.parse().expect("valid card")
     }
 
     fn five(text: &str) -> HandValue {

@@ -145,6 +145,14 @@ impl GameState {
             self.players[seat].hole_cards = Some([first_card, second_card]);
         }
 
+        if self.blinds.ante > 0 {
+            for seat in 0..n {
+                if not_busted(&self.players[seat]) {
+                    self.post_ante(seat, self.blinds.ante);
+                }
+            }
+        }
+
         let live_count = self.players.iter().filter(|p| not_busted(p)).count();
         let (small_blind_seat, big_blind_seat) = if live_count == 2 {
             // Heads-up: the button posts the small blind.
@@ -167,10 +175,21 @@ impl GameState {
 
     /// Moves up to `amount` from `seat`'s stack into the pot; returns what was actually posted.
     pub(crate) fn post(&mut self, seat: usize, amount: Chips) -> Chips {
+        let posted = self.commit(seat, amount);
+        self.players[seat].street_bet += posted;
+        posted
+    }
+
+    /// Moves up to `amount` into the pot without counting toward the street's bet,
+    /// as an ante does; returns what was actually posted.
+    fn post_ante(&mut self, seat: usize, amount: Chips) -> Chips {
+        self.commit(seat, amount)
+    }
+
+    fn commit(&mut self, seat: usize, amount: Chips) -> Chips {
         let player = &mut self.players[seat];
         let posted = amount.min(player.stack);
         player.stack -= posted;
-        player.street_bet += posted;
         player.hand_contribution += posted;
         if player.stack == 0 {
             player.status = PlayerStatus::AllIn;
@@ -384,6 +403,20 @@ mod tests {
         state.start_hand(2);
 
         assert_eq!(state.players[6].hole_cards, None);
+    }
+
+    #[test]
+    fn antes_go_into_the_pot_but_not_the_bet_to_call() {
+        let mut state = table(8);
+        state.blinds.ante = 2;
+        state.start_hand(1);
+
+        assert_eq!(state.players[4].stack, 998);
+        assert_eq!(state.players[4].street_bet, 0);
+        assert_eq!(state.players[4].hand_contribution, 2);
+        assert_eq!(state.players[3].street_bet, 10);
+        assert_eq!(state.players[3].hand_contribution, 12);
+        assert_eq!(state.current_bet, 10);
     }
 
     #[test]
