@@ -18,6 +18,8 @@ export interface SeatFrame {
   isWinner: boolean;
   /** Hand shown at showdown, e.g. "Full house". */
   shownHand: string | null;
+  /** Action codes per betting street (preflop, flop, turn, river), e.g. "bC". */
+  strip: [string, string, string, string];
 }
 
 export interface Frame {
@@ -50,6 +52,26 @@ const STREET_NAMES: Record<Street, string> = {
 
 export const streetName = (street: Street) => STREET_NAMES[street];
 
+/** One-letter action codes used in the action strips. */
+export const ACTION_CODES = [
+  ["b", "BLIND"],
+  ["X", "CHECK"],
+  ["C", "CALL"],
+  ["B", "BET"],
+  ["R", "RAISE"],
+  ["A", "ALL-IN"],
+  ["F", "FOLD"],
+  ["W", "WIN"],
+] as const;
+
+const STRIP_INDEX: Record<Street, number> = {
+  preflop: 0,
+  flop: 1,
+  turn: 2,
+  river: 3,
+  showdown: 3,
+};
+
 export function buildFrames(hand: HandLog): Frame[] {
   const nameOf = new Map(hand.seats.map((s) => [s.seat, s.name]));
   const seats: SeatFrame[] = hand.seats.map((start) => {
@@ -67,6 +89,7 @@ export function buildFrames(hand: HandLog): Frame[] {
       isButton: start.seat === hand.button,
       isWinner: false,
       shownHand: null,
+      strip: [start.posted - ante > 0 ? "b" : "", "", "", ""],
     };
   });
   const bySeat = new Map(seats.map((s) => [s.seat, s]));
@@ -86,7 +109,7 @@ export function buildFrames(hand: HandLog): Frame[] {
       street,
       board,
       pot,
-      seats: seats.map((s) => ({ ...s })),
+      seats: seats.map((s) => ({ ...s, strip: [...s.strip] as SeatFrame["strip"] })),
       actor,
       description,
       actionIndex,
@@ -115,23 +138,31 @@ export function buildFrames(hand: HandLog): Frame[] {
     pot += record.amount;
 
     let label: string;
+    let code: string;
     const action = record.action;
     if (action === "fold") {
       seat.folded = true;
       label = "Fold";
+      code = "F";
     } else if (action === "check") {
       label = "Check";
+      code = "X";
     } else if (action === "call") {
       label = `Call ${chips(record.amount)}`;
+      code = "C";
     } else {
-      label = `${currentBet === 0 ? "Bet" : "Raise to"} ${chips(action.raise.to)}`;
+      const isBet = currentBet === 0;
+      label = `${isBet ? "Bet" : "Raise to"} ${chips(action.raise.to)}`;
+      code = isBet ? "B" : "R";
       currentBet = Math.max(currentBet, action.raise.to);
     }
     if (seat.stack === 0 && record.amount > 0) {
       seat.allIn = true;
       label += " (all-in)";
+      code = "A";
     }
     seat.lastAction = label;
+    seat.strip[STRIP_INDEX[street]] += code;
 
     const rejected = record.rejected ? " (illegal move replaced)" : "";
     snapshot(`${seat.name}: ${label}${rejected}`, seat.seat, index);
@@ -159,6 +190,7 @@ export function buildFrames(hand: HandLog): Frame[] {
     seat.stack = hand.final_stacks[seat.seat] ?? seat.stack;
     seat.bet = 0;
     seat.isWinner = result.awards.some((award) => award.winners.includes(seat.seat));
+    if (seat.isWinner) seat.strip[STRIP_INDEX[street]] += "W";
   }
   const potTotal = result.awards.reduce((sum, award) => sum + award.amount, 0);
   pot = 0;

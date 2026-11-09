@@ -1,18 +1,12 @@
 {
   "seed": 1,
-  "starting_stack": 1500,
-  "hands_per_level": 20,
+  "starting_stack": 10000,
+  "hands_per_level": 10000,
   "blind_levels": [
-    { "small": 10, "big": 20, "ante": 0 },
-    { "small": 15, "big": 30, "ante": 0 },
-    { "small": 25, "big": 50, "ante": 5 },
-    { "small": 50, "big": 100, "ante": 10 },
-    { "small": 75, "big": 150, "ante": 15 },
-    { "small": 100, "big": 200, "ante": 25 },
-    { "small": 200, "big": 400, "ante": 50 },
-    { "small": 400, "big": 800, "ante": 100 }
+    { "small": 50, "big": 100, "ante": 0 }
   ],
-  "max_hands": 2000,
+  "max_hands": 10000,
+  "rebuy": true,
   "players": [
     { "name": "Seat 1", "bot": "check_call" },
     { "name": "Seat 2", "bot": "check_call" },

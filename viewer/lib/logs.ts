@@ -1,9 +1,11 @@
-// Server-side access to tournament logs written by the Rust runner.
+// Server-side access to match logs written by the Rust runner.
+//
+// Each match is a folder: logs/<id>/summary.json plus logs/<id>/hands/<n>.json.
 
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { TournamentLog } from "@/types/log";
+import type { HandLog, MatchSummary } from "@/types/log";
 
 /**
  * Defaults to the repo's logs/ folder, next to viewer/. Logs are read at request
@@ -12,58 +14,63 @@ import type { TournamentLog } from "@/types/log";
 const LOGS_DIR =
   process.env.POKERBOT_LOGS_DIR ?? path.join(process.cwd(), "..", "logs");
 
-/** Log ids are file names without `.json`; anything else could escape LOGS_DIR. */
+/** Match ids are folder names; anything else could escape LOGS_DIR. */
 const ID_PATTERN = /^[\w-]+$/;
 
-export interface TournamentSummary {
+export interface MatchListing {
   id: string;
   seed: number;
   players: number;
   hands: number;
+  rebuy: boolean;
   finished: boolean;
-  winner: string | null;
+  leader: string | null;
 }
 
-export async function loadTournament(id: string): Promise<TournamentLog | null> {
-  if (!ID_PATTERN.test(id)) return null;
+async function readJson<T>(...parts: string[]): Promise<T | null> {
   try {
-    const text = await readFile(
-      /*turbopackIgnore: true*/ path.join(LOGS_DIR, `${id}.json`),
-      "utf8",
-    );
-    return JSON.parse(text) as TournamentLog;
+    const text = await readFile(/*turbopackIgnore: true*/ path.join(LOGS_DIR, ...parts), "utf8");
+    return JSON.parse(text) as T;
   } catch {
     return null;
   }
 }
 
-export async function listTournaments(): Promise<TournamentSummary[]> {
-  let files: string[];
+export async function loadSummary(id: string): Promise<MatchSummary | null> {
+  if (!ID_PATTERN.test(id)) return null;
+  return readJson<MatchSummary>(id, "summary.json");
+}
+
+export async function loadHand(id: string, handNumber: number): Promise<HandLog | null> {
+  if (!ID_PATTERN.test(id) || !Number.isSafeInteger(handNumber) || handNumber < 1) return null;
+  return readJson<HandLog>(id, "hands", `${handNumber}.json`);
+}
+
+export async function listMatches(): Promise<MatchListing[]> {
+  let entries: string[];
   try {
-    files = await readdir(/*turbopackIgnore: true*/ LOGS_DIR);
+    entries = await readdir(/*turbopackIgnore: true*/ LOGS_DIR);
   } catch {
     return [];
   }
 
-  const ids = files
-    .filter((file) => file.endsWith(".json"))
-    .map((file) => file.slice(0, -".json".length))
-    .filter((id) => ID_PATTERN.test(id))
-    .sort();
-
-  const summaries = await Promise.all(
-    ids.map(async (id): Promise<TournamentSummary | null> => {
-      const log = await loadTournament(id);
-      if (!log) return null;
-      return {
-        id,
-        seed: log.config.seed,
-        players: log.config.players.length,
-        hands: log.hands.length,
-        finished: log.finished,
-        winner: log.finished ? (log.standings[0]?.name ?? null) : null,
-      };
-    }),
+  const listings = await Promise.all(
+    entries
+      .filter((id) => ID_PATTERN.test(id))
+      .sort()
+      .map(async (id): Promise<MatchListing | null> => {
+        const summary = await loadSummary(id);
+        if (!summary) return null;
+        return {
+          id,
+          seed: summary.config.seed,
+          players: summary.config.players.length,
+          hands: summary.hands.length,
+          rebuy: summary.config.rebuy,
+          finished: summary.finished,
+          leader: summary.standings[0]?.name ?? null,
+        };
+      }),
   );
-  return summaries.filter((summary) => summary !== null);
+  return listings.filter((listing) => listing !== null);
 }

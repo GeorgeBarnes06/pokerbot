@@ -11,7 +11,7 @@ const RANK_LABELS: Record<Rank, string> = {
   seven: "7",
   eight: "8",
   nine: "9",
-  ten: "10",
+  ten: "T",
   jack: "J",
   queen: "Q",
   king: "K",
@@ -52,3 +52,7 @@ export function actionText(action: Action): string {
 }
 
 export const chips = (amount: number) => amount.toLocaleString("en-US");
+
+/** Chip change with an explicit sign, e.g. "+1,200" or "−300". */
+export const signedChips = (amount: number) =>
+  `${amount > 0 ? "+" : amount < 0 ? "−" : "±"}${chips(Math.abs(amount))}`;

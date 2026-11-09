@@ -1,26 +1,63 @@
 @import "tailwindcss";
 
+/* Printed-sheet look: monospace ink on paper, a few accent colours. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --paper: #ffffff;
+  --ink: #111111;
+  --muted: #595959;
+  --faint: #c9c9c9;
+  --gutter: #8a8a8a;
+  --green: #0cab2c;
+  --red: #d0141e;
+  --amber: #b06300;
+  --warn: #ffc400;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    --paper: #0a0a0a;
+    --ink: #f2f2f2;
+    --muted: #a6a6a6;
+    --faint: #3d3d3d;
+    --gutter: #747474;
+    --red: #ff4b55;
+    --amber: #e8962e;
   }
 }
 
+:root[data-theme="dark"] {
+  --paper: #0a0a0a;
+  --ink: #f2f2f2;
+  --muted: #a6a6a6;
+  --faint: #3d3d3d;
+  --gutter: #747474;
+  --red: #ff4b55;
+  --amber: #e8962e;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-gutter: var(--gutter);
+  --color-green: var(--green);
+  --color-red: var(--red);
+  --color-amber: var(--amber);
+  --color-warn: var(--warn);
+  --font-mono: var(--font-source-code-pro), ui-monospace, Menlo, monospace;
+  --font-sans: var(--font-mono);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-source-code-pro), ui-monospace, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+::selection {
+  background: var(--warn);
+  color: #111111;
 }

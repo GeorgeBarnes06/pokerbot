@@ -1,154 +1,328 @@
 "use client";
 
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { PlayingCard } from "@/components/PlayingCard";
 import { chips } from "@/lib/format";
-import { buildFrames, streetName, type SeatFrame } from "@/lib/replay";
-import type { HandLog } from "@/types/log";
+import { ACTION_CODES, buildFrames, streetName, type SeatFrame } from "@/lib/replay";
+import type { Card, HandLog } from "@/types/log";
 
-export function HandReplay({ hand }: { hand: HandLog }) {
+const SPEEDS = [1, 4, 8, 16] as const;
+type Speed = (typeof SPEEDS)[number];
+
+/** Milliseconds per step at 1x. */
+const BASE_DELAY = 1000;
+
+interface Props {
+  hand: HandLog;
+  /** Seats at the table, so positions stay put as players bust. */
+  tableSize: number;
+  /** Next hand's URL; autoplay continues there when this hand ends. */
+  nextHref: string | null;
+}
+
+export function HandReplay({ hand, tableSize, nextHref }: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requested = Number(searchParams.get("autoplay"));
+  const initialSpeed = SPEEDS.find((s) => s === requested);
+
   const frames = useMemo(() => buildFrames(hand), [hand]);
-  const [step, setStep] = useState(0);
   const last = frames.length - 1;
+  const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(initialSpeed !== undefined);
+  const [speed, setSpeed] = useState<Speed>(initialSpeed ?? 4);
   const frame = frames[Math.min(step, last)];
 
   useEffect(() => {
+    if (!playing) return;
+    const delay = BASE_DELAY / speed;
+    if (step < last) {
+      const timer = setTimeout(() => setStep((s) => Math.min(s + 1, last)), delay);
+      return () => clearTimeout(timer);
+    }
+    if (nextHref) {
+      const timer = setTimeout(() => router.push(`${nextHref}?autoplay=${speed}`), delay * 3);
+      return () => clearTimeout(timer);
+    }
+  }, [playing, speed, step, last, nextHref, router]);
+
+  const goTo = (target: number) => {
+    setPlaying(false);
+    setStep(Math.max(0, Math.min(target, last)));
+  };
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "ArrowRight") setStep((s) => Math.min(s + 1, last));
-      if (event.key === "ArrowLeft") setStep((s) => Math.max(s - 1, 0));
+      if (event.key === "ArrowRight") {
+        setPlaying(false);
+        setStep((s) => Math.min(s + 1, last));
+      } else if (event.key === "ArrowLeft") {
+        setPlaying(false);
+        setStep((s) => Math.max(s - 1, 0));
+      } else if (event.key === " ") {
+        event.preventDefault();
+        setPlaying((p) => !p);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [last]);
 
+  const isPlaying = playing && (step < last || nextHref !== null);
+
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_18rem]">
-      <div className="flex flex-col gap-4">
-        <section className="rounded-3xl border-4 border-amber-900/60 bg-emerald-800 p-4 text-white shadow-inner sm:p-6">
-          <div className="flex flex-col items-center gap-3">
-            <div className="text-xs font-medium tracking-wider text-emerald-200 uppercase">
-              {streetName(frame.street)}
-            </div>
-            <div className="flex min-h-14 gap-1.5">
-              {frame.board.length === 0 ? (
-                <span className="self-center text-sm text-emerald-200/70">No board cards yet</span>
-              ) : (
-                frame.board.map((card, i) => <PlayingCard key={i} card={card} />)
-              )}
-            </div>
-            <div className="rounded-full bg-black/25 px-3 py-1 text-sm font-semibold">
-              Pot {chips(frame.pot)}
-            </div>
-            <p className="min-h-10 text-center text-sm text-emerald-50">{frame.description}</p>
-          </div>
-
-          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {frame.seats.map((seat) => (
-              <Seat key={seat.seat} seat={seat} acting={seat.seat === frame.actor} />
-            ))}
-          </div>
-        </section>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <ControlButton onClick={() => setStep(0)} disabled={step === 0}>
-            ⏮ Start
-          </ControlButton>
-          <ControlButton onClick={() => setStep((s) => Math.max(s - 1, 0))} disabled={step === 0}>
-            ◀ Back
-          </ControlButton>
-          <ControlButton
-            onClick={() => setStep((s) => Math.min(s + 1, last))}
-            disabled={step === last}
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="flex gap-1">
+          <TextButton label="First step" onClick={() => goTo(0)} disabled={step === 0}>
+            |&lt;
+          </TextButton>
+          <TextButton label="Previous step" onClick={() => goTo(step - 1)} disabled={step === 0}>
+            &lt;
+          </TextButton>
+          <TextButton
+            label={isPlaying ? "Pause" : "Play"}
+            onClick={() => {
+              if (!isPlaying && step === last && !nextHref) setStep(0);
+              setPlaying(!isPlaying);
+            }}
+            wide
           >
-            Next ▶
-          </ControlButton>
-          <ControlButton onClick={() => setStep(last)} disabled={step === last}>
-            End ⏭
-          </ControlButton>
-          <span className="ml-auto text-sm text-zinc-500">
-            Step {step + 1} of {frames.length} · arrow keys work too
-          </span>
+            {isPlaying ? "PAUSE" : "PLAY"}
+          </TextButton>
+          <TextButton label="Next step" onClick={() => goTo(step + 1)} disabled={step === last}>
+            &gt;
+          </TextButton>
+          <TextButton label="Last step" onClick={() => goTo(last)} disabled={step === last}>
+            &gt;|
+          </TextButton>
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="text-muted">SPEED</span>
+          {SPEEDS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              aria-pressed={speed === s}
+              onClick={() => setSpeed(s)}
+              className={`px-1 ${speed === s ? "bg-ink text-paper" : "hover:bg-warn hover:text-[#111]"}`}
+            >
+              {s}x
+            </button>
+          ))}
+        </span>
+        <span className="ml-auto text-muted">
+          STEP {step + 1}/{frames.length} · ←/→ STEP · SPACE PLAY
+        </span>
+      </div>
+
+      <div className="flex flex-wrap justify-between gap-x-4 uppercase">
+        <span>
+          HAND {String(hand.hand_number).padStart(6, "0")}, BLINDS {chips(hand.blinds.small)}/
+          {chips(hand.blinds.big)}
+          {hand.blinds.ante > 0 && `, ANTE ${chips(hand.blinds.ante)}`}
+        </span>
+        <span>{streetName(frame.street)}</span>
+      </div>
+
+      {/* Oval table on wider screens; a plain list of seats on phones. */}
+      <figure
+        aria-label="Table"
+        className="relative mx-auto my-6 hidden aspect-[2/1] w-full max-w-4xl sm:block"
+      >
+        <div className="absolute inset-[15%_10%] rounded-[50%] border border-ink shadow-[0_0_0_5px_var(--paper),0_0_0_6px_var(--ink)]" />
+        <TableCenter board={frame.board} pot={frame.pot} />
+        {frame.seats.map((seat) => {
+          const angle = Math.PI / 2 + (seat.seat / tableSize) * 2 * Math.PI;
+          return (
+            <div
+              key={seat.seat}
+              className="absolute w-[15ch] -translate-x-1/2 -translate-y-1/2"
+              style={{
+                left: `${50 + 45 * Math.cos(angle)}%`,
+                top: `${50 + 43 * Math.sin(angle)}%`,
+              }}
+            >
+              <SeatBox seat={seat} acting={seat.seat === frame.actor} />
+            </div>
+          );
+        })}
+      </figure>
+      <div className="flex flex-col gap-3 sm:hidden">
+        <TableCenter board={frame.board} pot={frame.pot} inline />
+        <div className="grid grid-cols-2 gap-2">
+          {frame.seats.map((seat) => (
+            <SeatBox key={seat.seat} seat={seat} acting={seat.seat === frame.actor} />
+          ))}
         </div>
       </div>
 
-      <aside className="rounded-xl border border-zinc-200 dark:border-zinc-800">
-        <h2 className="border-b border-zinc-200 px-3 py-2 text-sm font-semibold dark:border-zinc-800">
-          Action log
-        </h2>
-        <ol className="max-h-[32rem] overflow-y-auto text-sm">
+      <p className="min-h-[1.8em] border-y border-faint py-1">
+        <span className="text-muted">&gt; </span>
+        {frame.description}
+      </p>
+
+      <ActionStrips seats={frame.seats} />
+
+      <p className="flex flex-wrap gap-x-3 text-muted">
+        {ACTION_CODES.map(([code, name]) => (
+          <span key={code} className="whitespace-nowrap">
+            <span className={codeColor(code)}>{code}</span> {name}
+          </span>
+        ))}
+      </p>
+
+      <details className="border-t border-faint pt-2">
+        <summary className="cursor-pointer uppercase text-muted">Full log ({frames.length} steps)</summary>
+        <ol className="mt-2">
           {frames.map((f, i) => (
             <li key={i}>
               <button
                 type="button"
-                onClick={() => setStep(i)}
-                className={`w-full px-3 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-900 ${
-                  i === step ? "bg-emerald-50 font-medium dark:bg-emerald-950" : ""
-                } ${f.actionIndex === null ? "text-zinc-500" : ""}`}
+                onClick={() => goTo(i)}
+                className={`w-full text-left ${i === step ? "bg-warn text-[#111]" : "hover:bg-faint/40"} ${
+                  f.actionIndex === null && i !== step ? "text-muted" : ""
+                }`}
               >
-                {f.description}
+                {String(i + 1).padStart(3, " ")} {f.description}
               </button>
             </li>
           ))}
         </ol>
-      </aside>
+      </details>
     </div>
   );
 }
 
-function Seat({ seat, acting }: { seat: SeatFrame; acting: boolean }) {
-  const ring = seat.isWinner
-    ? "ring-2 ring-amber-300"
-    : acting
-      ? "ring-2 ring-white"
-      : "";
+function TableCenter({ board, pot, inline = false }: { board: Card[]; pot: number; inline?: boolean }) {
   return (
     <div
-      className={`flex flex-col gap-1.5 rounded-xl bg-black/30 p-2 ${ring} ${seat.folded ? "opacity-50" : ""}`}
+      className={
+        inline
+          ? "flex flex-col items-center gap-1"
+          : "absolute inset-0 flex flex-col items-center justify-center gap-1"
+      }
     >
-      <div className="flex items-center justify-between gap-1">
-        <span className="truncate text-sm font-semibold">{seat.name}</span>
-        {seat.isButton && (
-          <span
-            title="Dealer button"
-            className="rounded-full bg-white px-1.5 text-[10px] font-bold text-zinc-900"
-          >
-            D
-          </span>
+      <div className="flex min-h-[2.2em] gap-1">
+        {board.length === 0 ? (
+          <span className="self-center text-muted">[ NO BOARD ]</span>
+        ) : (
+          board.map((card, i) => <PlayingCard key={i} card={card} />)
         )}
       </div>
-      <div className="flex gap-1">
-        <PlayingCard card={seat.holeCards?.[0] ?? null} size="sm" dimmed={seat.folded} />
-        <PlayingCard card={seat.holeCards?.[1] ?? null} size="sm" dimmed={seat.folded} />
-      </div>
-      <div className="text-xs text-emerald-100">
-        {chips(seat.stack)} chips
-        {seat.bet > 0 && <span className="text-amber-200"> · bet {chips(seat.bet)}</span>}
-      </div>
-      <div className="min-h-4 text-xs font-medium">
-        {seat.shownHand ?? seat.lastAction ?? (seat.allIn ? "All-in" : "")}
-      </div>
+      <div>POT {chips(pot)}</div>
     </div>
   );
 }
 
-function ControlButton({
+function SeatBox({ seat, acting }: { seat: SeatFrame; acting: boolean }) {
+  const frame = seat.isWinner
+    ? "border-ink bg-warn text-[#111]"
+    : acting
+      ? "border-ink bg-paper"
+      : "border-faint bg-paper";
+  const status = seat.shownHand ?? seat.lastAction ?? (seat.allIn ? "All-in" : "");
+  return (
+    <div
+      className={`flex flex-col items-center border px-1 py-0.5 text-[11px] leading-[1.35] ${frame} ${
+        seat.folded && !seat.isWinner ? "text-muted" : ""
+      }`}
+    >
+      <span className="w-full truncate text-center uppercase">
+        {seat.name}
+        {seat.isButton && <span title="Dealer button"> (D)</span>}
+      </span>
+      <span className="my-0.5 flex gap-0.5">
+        <PlayingCard card={seat.holeCards?.[0] ?? null} dimmed={seat.folded} />
+        <PlayingCard card={seat.holeCards?.[1] ?? null} dimmed={seat.folded} />
+      </span>
+      <span>
+        {chips(seat.stack)}
+        {seat.bet > 0 && <span className={seat.isWinner ? "" : "text-amber"}> +{chips(seat.bet)}</span>}
+      </span>
+      <span className="min-h-[1.35em] w-full truncate text-center uppercase">{status}</span>
+    </div>
+  );
+}
+
+function ActionStrips({ seats }: { seats: SeatFrame[] }) {
+  const columns = ["PREFLOP", "FLOP", "TURN", "RIVER"];
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="text-left text-muted">
+            <th className="pr-4 font-normal">ACTION</th>
+            {columns.map((c) => (
+              <th key={c} className="pr-4 font-normal">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {seats.map((seat) => (
+            <tr key={seat.seat}>
+              <td className="pr-4 whitespace-nowrap uppercase">{seat.name}</td>
+              {seat.strip.map((codes, i) => (
+                <td key={i} className="pr-4 tracking-[0.3em]">
+                  {codes
+                    ? [...codes].map((code, j) => (
+                        <span key={j} className={codeColor(code)}>
+                          {code}
+                        </span>
+                      ))
+                    : <span className="text-faint">·</span>}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function codeColor(code: string): string {
+  switch (code) {
+    case "W":
+      return "text-green";
+    case "A":
+      return "text-red";
+    case "B":
+    case "R":
+      return "text-amber";
+    case "F":
+      return "text-muted";
+    default:
+      return "text-ink";
+  }
+}
+
+function TextButton({
   children,
+  label,
   onClick,
-  disabled,
+  disabled = false,
+  wide = false,
 }: {
   children: React.ReactNode;
+  label: string;
   onClick: () => void;
-  disabled: boolean;
+  disabled?: boolean;
+  wide?: boolean;
 }) {
   return (
     <button
       type="button"
+      aria-label={label}
       onClick={onClick}
       disabled={disabled}
-      className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-40 disabled:hover:bg-transparent dark:border-zinc-700 dark:hover:bg-zinc-900"
+      className={`${wide ? "min-w-[7ch]" : ""} hover:bg-warn hover:text-[#111] disabled:text-faint disabled:hover:bg-transparent`}
     >
-      {children}
+      [{children}]
     </button>
   );
 }

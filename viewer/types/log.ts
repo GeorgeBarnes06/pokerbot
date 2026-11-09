@@ -1,4 +1,4 @@
-// Mirrors the JSON the Rust runner writes to logs/ (see crates/engine/src/log.rs
+// Mirrors the JSON the Rust runner writes to logs/<match>/ (see crates/engine/src/log.rs
 // and crates/runner/src/tournament.rs). Keep in sync when those structs change.
 
 export type Rank =
@@ -115,6 +115,8 @@ export interface TournamentConfig {
   hands_per_level: number;
   blind_levels: Blinds[];
   max_hands: number;
+  /** Cash format: short stacks are topped back up and nobody is eliminated. */
+  rebuy: boolean;
   players: PlayerConfig[];
 }
 
@@ -124,12 +126,26 @@ export interface Standing {
   name: string;
   bot: string;
   final_stack: number;
+  rebuys: number;
+  /** Final stack minus the starting stack and every top-up. */
+  net_chips: number;
+  bb_per_100: number;
   busted_on_hand: number | null;
 }
 
-export interface TournamentLog {
+/** One line per hand in `summary.json`. */
+export interface HandSummary {
+  hand_number: number;
+  blinds: Blinds;
+  pot: number;
+  winners: number[];
+  showdown: boolean;
+}
+
+/** `logs/<match>/summary.json`; each hand is in `hands/<n>.json`. */
+export interface MatchSummary {
   config: TournamentConfig;
   finished: boolean;
   standings: Standing[];
-  hands: HandLog[];
+  hands: HandSummary[];
 }

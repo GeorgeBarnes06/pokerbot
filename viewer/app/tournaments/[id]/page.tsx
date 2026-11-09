@@ -2,120 +2,207 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
-import { chips } from "@/lib/format";
-import { loadTournament } from "@/lib/logs";
+import { BracketLink, Divider, Exhibit, Stat } from "@/components/Sheet";
+import { chips, signedChips } from "@/lib/format";
+import { loadSummary } from "@/lib/logs";
+import type { MatchSummary } from "@/types/log";
 
-export default function TournamentPage({ params }: PageProps<"/tournaments/[id]">) {
+const HANDS_PER_PAGE = 100;
+
+export default function MatchPage({ params, searchParams }: PageProps<"/tournaments/[id]">) {
   return (
-    <Suspense fallback={<p className="text-zinc-500">Loading tournament…</p>}>
-      {params.then(({ id }) => (
-        <Tournament id={id} />
+    <Suspense fallback={<p className="text-muted">LOADING MATCH…</p>}>
+      {Promise.all([params, searchParams]).then(([{ id }, query]) => (
+        <Match id={id} page={Number(query.page ?? 1)} />
       ))}
     </Suspense>
   );
 }
 
-async function Tournament({ id }: { id: string }) {
-  const log = await loadTournament(id);
-  if (!log) notFound();
+async function Match({ id, page }: { id: string; page: number }) {
+  const summary = await loadSummary(id);
+  if (!summary) notFound();
 
-  const nameOf = new Map(log.config.players.map((p, seat) => [seat, p.name]));
+  const { config } = summary;
+  const blinds = config.blind_levels[0];
+  const fixedBlinds = config.blind_levels.length === 1;
+  const showdowns = summary.hands.filter((h) => h.showdown).length;
 
   return (
-    <div className="flex flex-col gap-8">
-      <div>
-        <h1 className="text-2xl font-semibold">{id}</h1>
-        <p className="mt-1 text-sm text-zinc-500">
-          Seed {log.config.seed} · {log.config.players.length} players ·{" "}
-          {chips(log.config.starting_stack)} starting chips · {log.hands.length} hands ·{" "}
-          {log.finished ? "finished" : "stopped at hand limit"}
+    <>
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap justify-between gap-x-4">
+          <h1 className="font-normal uppercase">{id}</h1>
+          <BracketLink href={`/tournaments/${id}/hands/1?autoplay=8`}>Watch from hand 1</BracketLink>
+        </div>
+        <p className="uppercase">
+          {config.players.length} bots, no-limit hold&apos;em, blinds {chips(blinds.small)}/
+          {chips(blinds.big)}
+          {fixedBlinds ? "" : " rising"}, {config.rebuy ? "rebuys" : "elimination"}
         </p>
+        <div className="flex flex-wrap gap-x-6">
+          <Stat label="SEED" value={config.seed} />
+          <Stat label="STACKS" value={chips(config.starting_stack)} />
+          <Stat label="HANDS" value={chips(summary.hands.length)} />
+          <Stat label="SHOWDOWNS" value={chips(showdowns)} />
+          {!summary.finished && <span className="text-amber">STOPPED AT HAND LIMIT</span>}
+        </div>
       </div>
 
-      <section>
-        <h2 className="mb-2 text-lg font-semibold">Standings</h2>
-        <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-50 text-left text-zinc-500 dark:bg-zinc-900">
-              <tr>
-                <th className="px-3 py-2">Place</th>
-                <th className="px-3 py-2">Player</th>
-                <th className="px-3 py-2">Bot</th>
-                <th className="px-3 py-2 text-right">Chips</th>
-                <th className="px-3 py-2 text-right">Out on hand</th>
-              </tr>
-            </thead>
-            <tbody>
-              {log.standings.map((s) => (
-                <tr key={s.seat} className="border-t border-zinc-200 dark:border-zinc-800">
-                  <td className="px-3 py-2">{s.place}</td>
-                  <td className="px-3 py-2 font-medium">{s.name}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{s.bot}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{chips(s.final_stack)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">
+      <Divider />
+
+      <Exhibit
+        label="A"
+        title={config.rebuy ? "Leaderboard" : "Final standings"}
+        aside={config.rebuy ? "ranked by net chips" : "ranked by finish"}
+      >
+        <Standings summary={summary} id={id} />
+      </Exhibit>
+
+      <Divider />
+
+      <Exhibit label="B" title="Every hand" aside={`${chips(summary.hands.length)} hands`}>
+        <HandTable summary={summary} id={id} page={page} />
+      </Exhibit>
+    </>
+  );
+}
+
+function Standings({ summary, id }: { summary: MatchSummary; id: string }) {
+  const rebuy = summary.config.rebuy;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left">
+        <thead className="text-muted">
+          <tr>
+            <th className="pr-6 font-normal">#</th>
+            <th className="pr-6 font-normal">PLAYER</th>
+            <th className="pr-6 font-normal">BOT</th>
+            {rebuy ? (
+              <>
+                <th className="pr-6 text-right font-normal">NET CHIPS</th>
+                <th className="pr-6 text-right font-normal">BB/100</th>
+                <th className="text-right font-normal">REBUYS</th>
+              </>
+            ) : (
+              <>
+                <th className="pr-6 text-right font-normal">CHIPS</th>
+                <th className="text-right font-normal">OUT ON HAND</th>
+              </>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {summary.standings.map((s) => (
+            <tr key={s.seat} className={s.place === 1 ? "bg-warn text-[#111]" : ""}>
+              <td className="pr-6 tabular-nums">{s.place}</td>
+              <td className="pr-6 uppercase">{s.name}</td>
+              <td className="pr-6">{s.bot}</td>
+              {rebuy ? (
+                <>
+                  <td
+                    className={`pr-6 text-right tabular-nums ${
+                      s.place === 1 ? "" : s.net_chips < 0 ? "text-red" : "text-green"
+                    }`}
+                  >
+                    {signedChips(s.net_chips)}
+                  </td>
+                  <td className="pr-6 text-right tabular-nums">
+                    {s.bb_per_100 >= 0 ? "+" : "−"}
+                    {Math.abs(s.bb_per_100).toFixed(1)}
+                  </td>
+                  <td className="text-right tabular-nums">{s.rebuys}</td>
+                </>
+              ) : (
+                <>
+                  <td className="pr-6 text-right tabular-nums">{chips(s.final_stack)}</td>
+                  <td className="text-right tabular-nums">
                     {s.busted_on_hand === null ? (
                       "—"
                     ) : (
                       <Link
                         href={`/tournaments/${id}/hands/${s.busted_on_hand}`}
-                        className="text-emerald-700 hover:underline dark:text-emerald-400"
+                        className="hover:bg-warn hover:text-[#111]"
                       >
-                        {s.busted_on_hand}
+                        [{s.busted_on_hand}]
                       </Link>
                     )}
                   </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
-      <section>
-        <h2 className="mb-2 text-lg font-semibold">Hands</h2>
-        <div className="overflow-x-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-50 text-left text-zinc-500 dark:bg-zinc-900">
-              <tr>
-                <th className="px-3 py-2">#</th>
-                <th className="px-3 py-2">Blinds</th>
-                <th className="px-3 py-2 text-right">Pot</th>
-                <th className="px-3 py-2">Won by</th>
-                <th className="px-3 py-2">Ended</th>
+function HandTable({ summary, id, page }: { summary: MatchSummary; id: string; page: number }) {
+  const pages = Math.max(1, Math.ceil(summary.hands.length / HANDS_PER_PAGE));
+  const current = Number.isInteger(page) ? Math.min(Math.max(page, 1), pages) : 1;
+  const start = (current - 1) * HANDS_PER_PAGE;
+  const rows = summary.hands.slice(start, start + HANDS_PER_PAGE);
+  const nameOf = new Map(summary.config.players.map((p, seat) => [seat, p.name]));
+  const pageHref = (n: number) => `/tournaments/${id}?page=${n}`;
+
+  const pager = (
+    <div className="flex flex-wrap items-center justify-between gap-x-4">
+      <span className="flex gap-3">
+        {current > 1 ? <BracketLink href={pageHref(1)}>|&lt;</BracketLink> : <span className="text-faint">[|&lt;]</span>}
+        {current > 1 ? <BracketLink href={pageHref(current - 1)}>&lt;</BracketLink> : <span className="text-faint">[&lt;]</span>}
+        {current < pages ? <BracketLink href={pageHref(current + 1)}>&gt;</BracketLink> : <span className="text-faint">[&gt;]</span>}
+        {current < pages ? <BracketLink href={pageHref(pages)}>&gt;|</BracketLink> : <span className="text-faint">[&gt;|]</span>}
+      </span>
+      <span className="text-muted">
+        HANDS {chips(start + 1)}–{chips(start + rows.length)} · PAGE {current}/{pages}
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-2">
+      {pager}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left">
+          <thead className="text-muted">
+            <tr>
+              <th className="pr-6 font-normal">HAND</th>
+              <th className="pr-6 font-normal">BLINDS</th>
+              <th className="pr-6 text-right font-normal">POT</th>
+              <th className="pr-6 font-normal">WON BY</th>
+              <th className="font-normal">ENDED</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((hand) => (
+              <tr key={hand.hand_number}>
+                <td className="pr-6 tabular-nums">
+                  <Link
+                    href={`/tournaments/${id}/hands/${hand.hand_number}`}
+                    className="hover:bg-warn hover:text-[#111]"
+                  >
+                    [{String(hand.hand_number).padStart(5, "0")}]
+                  </Link>
+                </td>
+                <td className="pr-6 whitespace-nowrap tabular-nums">
+                  {chips(hand.blinds.small)}/{chips(hand.blinds.big)}
+                  {hand.blinds.ante > 0 && <span className="text-muted"> +{chips(hand.blinds.ante)}</span>}
+                </td>
+                <td className="pr-6 text-right tabular-nums">{chips(hand.pot)}</td>
+                <td className="pr-6 uppercase">
+                  <span className="text-green">W</span>{" "}
+                  {hand.winners.map((seat) => nameOf.get(seat)).join(", ")}
+                </td>
+                <td className={hand.showdown ? "" : "text-muted"}>
+                  {hand.showdown ? "SHOWDOWN" : "FOLDS"}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {log.hands.map((hand) => {
-                const pot = hand.result.awards.reduce((sum, a) => sum + a.amount, 0);
-                const winners = [...new Set(hand.result.awards.flatMap((a) => a.winners))]
-                  .map((seat) => nameOf.get(seat))
-                  .join(", ");
-                return (
-                  <tr key={hand.hand_number} className="border-t border-zinc-200 dark:border-zinc-800">
-                    <td className="px-3 py-1.5">
-                      <Link
-                        href={`/tournaments/${id}/hands/${hand.hand_number}`}
-                        className="text-emerald-700 hover:underline dark:text-emerald-400"
-                      >
-                        {hand.hand_number}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-1.5 tabular-nums">
-                      {chips(hand.blinds.small)}/{chips(hand.blinds.big)}
-                      {hand.blinds.ante > 0 && ` (ante ${chips(hand.blinds.ante)})`}
-                    </td>
-                    <td className="px-3 py-1.5 text-right tabular-nums">{chips(pot)}</td>
-                    <td className="px-3 py-1.5">{winners}</td>
-                    <td className="px-3 py-1.5 text-zinc-500">
-                      {hand.result.shown.length > 0 ? "Showdown" : "Everyone folded"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pager}
     </div>
   );
 }

@@ -20,8 +20,14 @@ pub struct TournamentConfig {
     pub hands_per_level: u64,
     /// Blind levels in order; the last one repeats once reached.
     pub blind_levels: Vec<Blinds>,
-    /// Safety limit: stop after this many hands even if nobody has won.
+    /// Stop after this many hands. With rebuys this is the match length; without,
+    /// a safety limit in case nobody wins.
     pub max_hands: u64,
+    /// Cash-game format: a player with less than one big blind at the start of a
+    /// hand is topped back up to `starting_stack`, so nobody is ever eliminated.
+    /// Without rebuys, players bust out until one has every chip.
+    #[serde(default)]
+    pub rebuy: bool,
     /// One entry per seat, in seat order.
     pub players: Vec<PlayerConfig>,
 }
