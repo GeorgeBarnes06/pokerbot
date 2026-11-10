@@ -19,17 +19,24 @@
 
 use engine::state::Action;
 use engine::view::PlayerView;
+use engine::evaluator::{evaluate, HandCategory};
+
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::{kit, Bot};
 
-#[allow(dead_code)] // used once the strategy is written
 const PREMIUM: &[&str] = &["AA", "KK", "QQ", "JJ", "AKs", "AKo"];
-#[allow(dead_code)]
 const PLAYABLE: &[&str] = &["TT", "99", "88", "AQs", "AQo", "AJs", "KQs"];
 
-#[allow(dead_code)] // fields used once the strategy is written
+enum Strength {
+    Strong,
+    Medium,
+    Weak,
+}
+
+
+#[allow(dead_code)] // rng and bet_fraction are used once postflop is written
 pub struct FoldBot {
     rng: StdRng,            // seeded per seat by the runner; use it for all randomness
     open_size_bb: f64,      // preflop open size, in big blinds
@@ -50,31 +57,45 @@ impl FoldBot {
     }
 }
 
-#[allow(dead_code, unused_variables)] // remove once decide calls these and notes is used
+#[allow(unused_variables)] // remove once postflop uses notes
 impl FoldBot {
     fn preflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
-        // 1. Get the hand name: kit::preflop_key(view.hole_cards), e.g. "AKs".
-        // 2. Count raises so far: kit::raises_this_street(view).
-        //    Blinds don't count, so 0 means nobody has raised yet.
-        //
-        // 3. PREMIUM:
-        //    - Nobody has raised: raise to open_size_bb big blinds
-        //      (kit::raise_to(view, open_size_bb * view.blinds.big)).
-        //    - Someone raised: re-raise to reraise_multiple × view.current_bet.
-        //
-        // 4. PLAYABLE:
-        //    - Nobody has raised: open the same way as a premium.
-        //    - One raise, and the call is cheap (kit::pot_odds(view) at most
-        //      max_call_fraction): call (kit::check_or_call).
-        //    - Otherwise: fold (kit::check_or_fold).
-        //
-        // 5. Anything else: kit::check_or_fold(view). A free check in the big blind
-        //    is taken; everything else folds.
-        //
-        // 6. Before returning, push one note, e.g. "premium AKs, raise to 300".
-        //
-        // Placeholder until written:
-        kit::check_or_call(view)
+        let hand_name = kit::preflop_key(view.hole_cards); // e.g. "AKs"
+        let raises = kit::raises_this_street(view); // 0 = nobody has raised yet
+        let open_to = (self.open_size_bb * view.blinds.big as f64) as u64; // 3.0 × 100 = 300
+        let reraise_to = (self.reraise_multiple * view.current_bet as f64) as u64; // 3.0 × their raise
+
+        // Situations 1 and 2: premium hand
+        if PREMIUM.contains(&hand_name.as_str()) {
+            let action = if raises == 0 {
+                kit::raise_to(view, open_to)
+            } else {
+                kit::raise_to(view, reraise_to)
+            };
+            let did = describe(action);
+            notes.push(format!("premium {hand_name}, {raises} raises: {did}"));
+            return action;
+        }
+
+        // Situations 3 and 4: playable hand
+        if PLAYABLE.contains(&hand_name.as_str()) {
+            let action = if raises == 0 {
+                kit::raise_to(view, open_to)
+            } else if raises == 1 && kit::pot_odds(view) <= self.max_call_fraction {
+                kit::check_or_call(view)
+            } else {
+                kit::check_or_fold(view)
+            };
+            let did = describe(action);
+            notes.push(format!("playable {hand_name}, {raises} raises: {did}"));
+            return action;
+        }
+
+        // Situation 5: everything else
+        let action = kit::check_or_fold(view);
+        let did = describe(action);
+        notes.push(format!("{hand_name} not in range: {did}"));
+        action
     }
 
     fn postflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
@@ -103,8 +124,27 @@ impl FoldBot {
 }
 
 impl Bot for FoldBot {
-    fn decide(&mut self, view: &PlayerView, _notes: &mut Vec<String>) -> Action {
-        // TODO(design): FOLDBOT's strategy goes here. Placeholder: check or call.
-        kit::check_or_call(view)
+    fn decide(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
+        if view.board.is_empty() {
+            self.preflop(view, notes)
+        } else {
+            self.postflop(view, notes)
+        }
     }
+}
+
+/// Short text for a note, e.g. "raise to 300". Describes the action actually taken, which can
+/// differ from the one asked for: `kit::raise_to` shrinks a raise to what the stack allows, or
+/// calls when raising isn't allowed.
+fn describe(action: Action) -> String {
+    match action {
+        Action::Fold => "fold".to_string(),
+        Action::Check => "check".to_string(),
+        Action::Call => "call".to_string(),
+        Action::Raise { to } => format!("raise to {to}"),
+    }
+}
+
+fn strength(view: &PlayerView) -> Strength {
+
 }
