@@ -32,13 +32,25 @@ pub struct HandValue {
 
 /// Returns the best five-card hand that can be made from seven cards.
 pub fn evaluate(cards: [Card; 7]) -> HandValue {
-    let mut best: Option<HandValue> = None;
+    evaluate_best(&cards)
+}
 
-    for a in 0..3 {
-        for b in a + 1..4 {
-            for c in b + 1..5 {
-                for d in c + 1..6 {
-                    for e in d + 1..7 {
+/// Returns the best five-card hand from 5, 6 or 7 cards: hole cards plus the
+/// board on the flop, turn or river.
+///
+/// # Panics
+///
+/// If given fewer than 5 or more than 7 cards.
+pub fn evaluate_best(cards: &[Card]) -> HandValue {
+    let n = cards.len();
+    assert!((5..=7).contains(&n), "evaluate_best needs 5 to 7 cards, got {n}");
+
+    let mut best: Option<HandValue> = None;
+    for a in 0..n {
+        for b in a + 1..n {
+            for c in b + 1..n {
+                for d in c + 1..n {
+                    for e in d + 1..n {
                         let five_cards = [cards[a], cards[b], cards[c], cards[d], cards[e]];
                         best = best.max(Some(classify_five(five_cards)));
                     }
@@ -47,7 +59,7 @@ pub fn evaluate(cards: [Card; 7]) -> HandValue {
         }
     }
 
-    best.expect("seven cards always contain a five-card hand")
+    best.expect("five or more cards always contain a five-card hand")
 }
 
 fn classify_five(cards: [Card; 5]) -> HandValue {
@@ -119,7 +131,7 @@ fn classify_five(cards: [Card; 5]) -> HandValue {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_five, evaluate, HandCategory, HandValue};
+    use super::{classify_five, evaluate, evaluate_best, HandCategory, HandValue};
     use crate::card::Card;
 
     fn card(text: &str) -> Card {
@@ -134,6 +146,37 @@ mod tests {
     fn seven(text: &str) -> HandValue {
         let cards: Vec<Card> = text.split_whitespace().map(card).collect();
         evaluate(cards.try_into().unwrap())
+    }
+
+    fn best(text: &str) -> HandValue {
+        let cards: Vec<Card> = text.split_whitespace().map(card).collect();
+        evaluate_best(&cards)
+    }
+
+    #[test]
+    fn best_of_five_is_that_hand() {
+        assert_eq!(best("Ah Kd 7c 7s 2h"), five("Ah Kd 7c 7s 2h"));
+    }
+
+    #[test]
+    fn best_of_six_picks_the_strongest_five() {
+        // Flop plus turn: the turn ten completes a straight.
+        let value = best("9h 8d Jc Qs 4h Td");
+        assert_eq!(value.category, HandCategory::Straight);
+        assert_eq!(value.kickers, [12, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn best_of_seven_matches_evaluate() {
+        let text = "Ah Kh Qh 2c 3d Jh Th";
+        assert_eq!(best(text), seven(text));
+        assert_eq!(best(text).category, HandCategory::StraightFlush);
+    }
+
+    #[test]
+    #[should_panic(expected = "5 to 7 cards")]
+    fn fewer_than_five_cards_panics() {
+        best("Ah Kd 7c 7s");
     }
 
     #[test]
