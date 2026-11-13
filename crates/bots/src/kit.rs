@@ -2,9 +2,13 @@
 //! they don't decide anything.
 
 use engine::card::{Card, Rank};
+use engine::deck::Deck;
+use engine::evaluator::{evaluate_best, HandValue};
 use engine::log::ActionRecord;
 use engine::state::{Action, Chips, PlayerStatus};
 use engine::view::PlayerView;
+use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 
 /// Check if free, otherwise call.
 pub fn check_or_call(view: &PlayerView) -> Action {
@@ -28,7 +32,9 @@ pub fn check_or_fold(view: &PlayerView) -> Action {
 /// range. If raising isn't allowed, checks or calls instead.
 pub fn raise_to(view: &PlayerView, to: Chips) -> Action {
     match view.legal.raise_range {
-        Some((min, max)) => Action::Raise { to: to.clamp(min, max) },
+        Some((min, max)) => Action::Raise {
+            to: to.clamp(min, max),
+        },
         None => check_or_call(view),
     }
 }
@@ -112,6 +118,85 @@ pub fn preflop_key(cards: [Card; 2]) -> String {
     }
 }
 
+/// Your best five-card hand from your hole cards and the board. `None` preflop,
+/// when there is no board yet.
+pub fn made_hand(view: &PlayerView) -> Option<HandValue> {
+    if view.board.len() < 3 {
+        return None;
+    }
+    let mut cards = view.board.clone();
+    cards.extend(view.hole_cards);
+    Some(evaluate_best(&cards))
+}
+
+/// Estimated share of the pot you win against `opponents` random hands, by
+/// dealing out `samples` random opponent hands and board run-outs (ties count
+/// as a share). Uses only what you can see, so it is fair to call from `decide`.
+///
+/// About 1,000 samples keeps a decision well inside the 100 ms budget at a full table.
+pub fn equity_vs_random(
+    view: &PlayerView,
+    opponents: usize,
+    samples: u32,
+    rng: &mut StdRng,
+) -> f64 {
+    let known: Vec<Card> = view.hole_cards.iter().chain(&view.board).copied().collect();
+    let mut deck: Vec<Card> = Deck::new()
+        .cards
+        .into_iter()
+        .filter(|c| !known.contains(c))
+        .collect();
+    let board_needed = 5 - view.board.len();
+    let mut won = 0.0;
+
+    for _ in 0..samples {
+        let (dealt, _) = deck.partial_shuffle(rng, opponents * 2 + board_needed);
+        let mut board = view.board.clone();
+        board.extend_from_slice(&dealt[opponents * 2..]);
+
+        let mut mine = board.clone();
+        mine.extend(view.hole_cards);
+        let me = evaluate_best(&mine);
+
+        let mut best_other = None;
+        for opponent in dealt[..opponents * 2].chunks(2) {
+            let mut theirs = board.clone();
+            theirs.extend_from_slice(opponent);
+            best_other = best_other.max(Some(evaluate_best(&theirs)));
+        }
+
+        match best_other {
+            Some(other) if other > me => {}
+            Some(other) if other == me => {
+                let tied = dealt[..opponents * 2]
+                    .chunks(2)
+                    .filter(|opponent| {
+                        let mut theirs = board.clone();
+                        theirs.extend_from_slice(opponent);
+                        evaluate_best(&theirs) == me
+                    })
+                    .count();
+                won += 1.0 / (tied + 1) as f64;
+            }
+            _ => won += 1.0,
+        }
+    }
+
+    won / samples as f64
+}
+
+/// Short text for a note, e.g. "raise to 300". Describes the action actually
+/// taken, which can differ from the one asked for: the raise helpers shrink a
+/// raise to what the stack allows, or call when raising isn't allowed.
+pub fn describe(action: Action) -> String {
+    match action {
+        Action::Fold => "fold".to_string(),
+        Action::Check => "check".to_string(),
+        Action::Call => "call".to_string(),
+        Action::Raise { to } => format!("raise to {to}"),
+    }
+}
+
 fn rank_char(rank: Rank) -> char {
     b"23456789TJQKA"[rank.get_rank() as usize - 2] as char
 }
@@ -127,13 +212,24 @@ mod tests {
         let players = (0..players)
             .map(|seat| Player::new(seat, format!("P{seat}"), 1000))
             .collect();
-        let mut state = GameState::new(players, 0, Blinds { small: 5, big: 10, ante: 0 });
+        let mut state = GameState::new(
+            players,
+            0,
+            Blinds {
+                small: 5,
+                big: 10,
+                ante: 0,
+            },
+        );
         state.start_hand(1);
         state.current_view(&[]).unwrap()
     }
 
     fn cards(text: &str) -> [Card; 2] {
-        let c: Vec<Card> = text.split_whitespace().map(|c| c.parse().unwrap()).collect();
+        let c: Vec<Card> = text
+            .split_whitespace()
+            .map(|c| c.parse().unwrap())
+            .collect();
         [c[0], c[1]]
     }
 
@@ -165,5 +261,49 @@ mod tests {
         assert_eq!(stack_in_big_blinds(&view), 100.0);
         assert_eq!(check_or_fold(&view), Action::Fold);
         assert_eq!(check_or_call(&view), Action::Call);
+    }
+
+    fn board(text: &str) -> Vec<Card> {
+        text.split_whitespace()
+            .map(|c| c.parse().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn made_hand_needs_a_board() {
+        let mut view = first_view(2);
+        assert!(made_hand(&view).is_none());
+        view.hole_cards = cards("Ah Ad");
+        view.board = board("As 7c 2d");
+        assert_eq!(
+            made_hand(&view).unwrap().category,
+            engine::evaluator::HandCategory::ThreeOfAKind
+        );
+    }
+
+    #[test]
+    fn equity_vs_random_is_sensible() {
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut view = first_view(2);
+
+        view.hole_cards = cards("Ah Ad");
+        let aces = equity_vs_random(&view, 1, 2000, &mut rng);
+        assert!((0.80..0.90).contains(&aces), "AA vs one hand: {aces}");
+
+        view.hole_cards = cards("7c 2d");
+        let worst = equity_vs_random(&view, 1, 2000, &mut rng);
+        assert!((0.28..0.40).contains(&worst), "72o vs one hand: {worst}");
+
+        // A royal flush on the river can't lose.
+        view.hole_cards = cards("Ah Kh");
+        view.board = board("Qh Jh Th 2c 3d");
+        assert_eq!(equity_vs_random(&view, 7, 200, &mut rng), 1.0);
+    }
+
+    #[test]
+    fn describe_names_the_action() {
+        assert_eq!(describe(Action::Raise { to: 300 }), "raise to 300");
+        assert_eq!(describe(Action::Fold), "fold");
     }
 }

@@ -17,9 +17,10 @@
 //!   strong hands. Small but steady wins in the 8-bot table, folding most hands and losing
 //!   little apart from blinds.
 
+#[allow(unused_imports)] // remove once strength uses them
+use engine::evaluator::{evaluate_best, HandCategory};
 use engine::state::Action;
 use engine::view::PlayerView;
-use engine::evaluator::{evaluate, HandCategory};
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -34,7 +35,6 @@ enum Strength {
     Medium,
     Weak,
 }
-
 
 #[allow(dead_code)] // rng and bet_fraction are used once postflop is written
 pub struct FoldBot {
@@ -57,7 +57,7 @@ impl FoldBot {
     }
 }
 
-#[allow(unused_variables)] // remove once postflop uses notes
+#[allow(unused_variables, clippy::ptr_arg)] // remove once postflop uses notes
 impl FoldBot {
     fn preflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
         let hand_name = kit::preflop_key(view.hole_cards); // e.g. "AKs"
@@ -72,7 +72,7 @@ impl FoldBot {
             } else {
                 kit::raise_to(view, reraise_to)
             };
-            let did = describe(action);
+            let did = kit::describe(action);
             notes.push(format!("premium {hand_name}, {raises} raises: {did}"));
             return action;
         }
@@ -86,14 +86,14 @@ impl FoldBot {
             } else {
                 kit::check_or_fold(view)
             };
-            let did = describe(action);
+            let did = kit::describe(action);
             notes.push(format!("playable {hand_name}, {raises} raises: {did}"));
             return action;
         }
 
         // Situation 5: everything else
         let action = kit::check_or_fold(view);
-        let did = describe(action);
+        let did = kit::describe(action);
         notes.push(format!("{hand_name} not in range: {did}"));
         action
     }
@@ -133,18 +133,7 @@ impl Bot for FoldBot {
     }
 }
 
-/// Short text for a note, e.g. "raise to 300". Describes the action actually taken, which can
-/// differ from the one asked for: `kit::raise_to` shrinks a raise to what the stack allows, or
-/// calls when raising isn't allowed.
-fn describe(action: Action) -> String {
-    match action {
-        Action::Fold => "fold".to_string(),
-        Action::Check => "check".to_string(),
-        Action::Call => "call".to_string(),
-        Action::Raise { to } => format!("raise to {to}"),
-    }
-}
-
+#[allow(dead_code)] // remove once postflop calls it
 fn strength(view: &PlayerView) -> Strength {
-
+    todo!("FOLDBOT: rate the hand with kit::made_hand(view)") // placeholder so the crate builds
 }

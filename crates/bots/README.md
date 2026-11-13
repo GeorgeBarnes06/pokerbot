@@ -49,7 +49,11 @@ They read the table and build legal actions; they don't decide anything.
 - `pot_odds`, `stack_in_big_blinds`, `players_in_hand`, `seats_after_button`
 - `actions_this_street`, `raises_this_street`
 - `preflop_key(cards)`: `"AKs"`, `"T9o"`, `"QQ"`
-- `engine::evaluator::evaluate(seven_cards)` ranks a made hand
+- `made_hand(view)`: your best five-card hand on the flop, turn or river (`None` preflop)
+- `equity_vs_random(view, opponents, samples, rng)`: your share of the pot against random
+  hands, from what you can see (about 13 ms for 7 opponents at 1,000 samples)
+- `describe(action)`: `"raise to 300"`, for notes
+- `engine::evaluator::evaluate_best(&cards)` ranks any 5 to 7 cards
 
 `engine::analysis` computes equity with **every** hand known. It is for figures
 only: a bot calling it would be cheating, and it never sees other players' cards anyway.
