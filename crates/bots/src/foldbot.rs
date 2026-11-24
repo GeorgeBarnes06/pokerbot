@@ -17,8 +17,7 @@
 //!   strong hands. Small but steady wins in the 8-bot table, folding most hands and losing
 //!   little apart from blinds.
 
-#[allow(unused_imports)] // remove once strength uses them
-use engine::evaluator::{evaluate_best, HandCategory};
+use engine::evaluator::HandCategory;
 use engine::state::Action;
 use engine::view::PlayerView;
 
@@ -36,9 +35,9 @@ enum Strength {
     Weak,
 }
 
-#[allow(dead_code)] // rng and bet_fraction are used once postflop is written
 pub struct FoldBot {
-    rng: StdRng,            // seeded per seat by the runner; use it for all randomness
+    #[allow(dead_code)] // unused until the strategy needs randomness
+    rng: StdRng, // seeded per seat by the runner; use it for all randomness
     open_size_bb: f64,      // preflop open size, in big blinds
     reraise_multiple: f64,  // re-raise size, as a multiple of the raise faced
     bet_fraction: f64,      // postflop bet size, as a fraction of the pot
@@ -57,7 +56,6 @@ impl FoldBot {
     }
 }
 
-#[allow(unused_variables, clippy::ptr_arg)] // remove once postflop uses notes
 impl FoldBot {
     fn preflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
         let hand_name = kit::preflop_key(view.hole_cards); // e.g. "AKs"
@@ -99,27 +97,40 @@ impl FoldBot {
     }
 
     fn postflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
-        // 1. Work out how strong the hand is: hole cards + view.board through the
-        //    evaluator, sorted into Strong / Medium / Weak (a small `strength`
-        //    helper returning an enum keeps this tidy).
-        //
-        // 2. Strong (two pair or better, or top pair with a good kicker):
-        //    - Nothing to call (view.to_call == 0): bet bet_fraction of the pot
-        //      (kit::raise_pot_fraction(view, bet_fraction)).
-        //    - Facing a bet: call (kit::check_or_call). Optionally raise with
-        //      very strong hands (a set or better).
-        //
-        // 3. Medium (any other pair):
-        //    - Nothing to call: check.
-        //    - Facing a bet: call only if kit::pot_odds(view) is at most
-        //      max_call_fraction; otherwise fold.
-        //
-        // 4. Weak (no pair): kit::check_or_fold(view).
-        //
-        // 5. Before returning, push one note, e.g. "medium pair, call 1/4 pot".
-        //
-        // Placeholder until written:
-        kit::check_or_call(view)
+        let action = match strength(view) {
+            Strength::Strong => {
+                if view.to_call == 0 {
+                    //if nobody has bet
+                    kit::raise_pot_fraction(view, self.bet_fraction) // bet 75% of the pot
+                } else {
+                    kit::check_or_call(view)
+                }
+            }
+            Strength::Medium => {
+                if view.to_call == 0 {
+                    //if nobody has bet
+                    kit::check_or_call(view)
+                } else {
+                    // if somebody has bet
+                    let pot_odds = kit::pot_odds(view);
+                    if pot_odds <= self.max_call_fraction {
+                        kit::check_or_call(view)
+                    } else {
+                        kit::check_or_fold(view)
+                    }
+                }
+            }
+            Strength::Weak => {
+                if view.to_call == 0 {
+                    kit::check_or_call(view)
+                } else {
+                    kit::check_or_fold(view)
+                }
+            }
+        };
+        let did = kit::describe(action);
+        notes.push(format!("postflop: {did}"));
+        action
     }
 }
 
@@ -133,7 +144,28 @@ impl Bot for FoldBot {
     }
 }
 
-#[allow(dead_code)] // remove once postflop calls it
 fn strength(view: &PlayerView) -> Strength {
-    todo!("FOLDBOT: rate the hand with kit::made_hand(view)") // placeholder so the crate builds
+    let hand = kit::made_hand(view).unwrap();
+
+    if hand.category >= HandCategory::TwoPair {
+        return Strength::Strong;
+    }
+    if hand.category == HandCategory::HighCard {
+        return Strength::Weak;
+    }
+    let pair = hand.kickers[0];
+    let top = view
+        .board
+        .iter()
+        .map(|card| card.rank.get_rank())
+        .max()
+        .unwrap();
+    let c1 = view.hole_cards[0].rank.get_rank();
+    let c2 = view.hole_cards[1].rank.get_rank();
+    if c1 != pair && c2 != pair {
+        return Strength::Weak;
+    } else if pair >= top {
+        return Strength::Strong;
+    }
+    Strength::Medium
 }

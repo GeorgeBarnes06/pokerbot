@@ -9,7 +9,11 @@ use engine::hand::Decision;
 use engine::log::HandLog;
 use engine::state::{Blinds, GameState, Player, PlayerStatus};
 
-const BLINDS: Blinds = Blinds { small: 50, big: 100, ante: 0 };
+const BLINDS: Blinds = Blinds {
+    small: 50,
+    big: 100,
+    ante: 0,
+};
 const STACK: u64 = 10_000;
 
 /// Plays `hands` hands with rebuys, like the default match, and returns every log.
@@ -17,7 +21,9 @@ fn play(names: &[&str], hands: u64) -> Vec<HandLog> {
     let mut bots: Vec<Box<dyn Bot>> = names
         .iter()
         .enumerate()
-        .map(|(seat, name)| create(name, seat as u64).unwrap_or_else(|| panic!("unknown bot {name}")))
+        .map(|(seat, name)| {
+            create(name, seat as u64).unwrap_or_else(|| panic!("unknown bot {name}"))
+        })
         .collect();
     let players = names
         .iter()
@@ -124,7 +130,10 @@ fn each_model_handles_short_stacks_and_all_ins() {
 #[test]
 fn every_model_name_is_registered() {
     for (name, _) in MODELS {
-        assert!(create(name, 0).is_some(), "{name} missing from bots::create");
+        assert!(
+            create(name, 0).is_some(),
+            "{name} missing from bots::create"
+        );
     }
     assert!(create("check_call", 0).is_some());
     assert!(create("nobody", 0).is_none());
