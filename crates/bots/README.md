@@ -52,6 +52,8 @@ They read the table and build legal actions; they don't decide anything.
 - `made_hand(view)`: your best five-card hand on the flop, turn or river (`None` preflop)
 - `equity_vs_random(view, opponents, samples, rng)`: your share of the pot against random
   hands, from what you can see (about 13 ms for 7 opponents at 1,000 samples)
+- `has_flush_draw(view)`, `has_straight_draw(view)`: four to a flush, or an open-ended
+  straight draw, using at least one of your hole cards
 - `describe(action)`: `"raise to 300"`, for notes
 - `engine::evaluator::evaluate_best(&cards)` ranks any 5 to 7 cards
 

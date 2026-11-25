@@ -5,16 +5,19 @@
 //! # Design
 //!
 //! - **Idea:** A loose, passive player (a "calling station"). Preflop it calls with a wide
-//!   `PLAYABLE` range and rarely raises. Postflop it calls with any pair or better, and
-//!   chases flush and straight draws until the river; with nothing, it checks or folds.
+//!   `PLAYABLE` range and never raises. Postflop it never bets: it checks when it can, calls
+//!   with any pair of its own or better, and chases flush and straight draws until the river;
+//!   with nothing, it folds.
 //! - **Reads from `PlayerView`:** hole cards, board, street, pot and amount to call.
 //! - **Remembers between hands (`observe`):** nothing; every hand is played on its own.
 //! - **Parameters to tune:** the `PLAYABLE` list, `max_call_fraction` (0.5),
-//!   `draw_call_fraction` (0.35), `open_size_bb` (2.0).
-//! - **Expected result:** slightly better than `check_call`, because it folds its worst hands
-//!   and missed draws, but losing to tight bots like FOLDBOT that bet their strong hands
-//!   into it.
+//!   `draw_call_fraction` (0.35).
+//! - **Expected result:** small wins at the 8-bot table against players who bet
+//!   too much or never fold (+11 BB/100, 2nd, while the others were still check/call stubs).
+//!   Heads-up it loses (-17.8 BB/100 against `check_call`, -6.0 against FOLDBOT): folding
+//!   80% of hands costs a blind almost every hand, and it never bets to win it back.
 
+use engine::evaluator::HandCategory;
 use engine::state::Action;
 use engine::view::PlayerView;
 use rand::rngs::StdRng;
@@ -37,12 +40,11 @@ const PLAYABLE: &[&str] = &[
     "T9s", "98s", "87s", "76s", "65s", "54s",
 ];
 
-#[allow(dead_code)] // remove once the strategy uses every field
 pub struct RiverRat {
-    rng: StdRng,             // seeded per seat by the runner; use it for all randomness
-    max_call_fraction: f64,  // largest call with a made hand, as a share of the pot
+    #[allow(dead_code)] // unused until the strategy needs randomness
+    rng: StdRng, // seeded per seat by the runner; use it for all randomness
+    max_call_fraction: f64, // largest call with a made hand, as a share of the pot
     draw_call_fraction: f64, // largest call while chasing a draw
-    open_size_bb: f64,       // preflop raise size, when it raises at all
 }
 
 impl RiverRat {
@@ -51,12 +53,10 @@ impl RiverRat {
             rng: StdRng::seed_from_u64(seed),
             max_call_fraction: 0.5,
             draw_call_fraction: 0.35,
-            open_size_bb: 2.0,
         }
     }
 }
 
-#[allow(dead_code, unused_variables, clippy::ptr_arg)] // remove once decide calls these and notes is used
 impl RiverRat {
     fn preflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
         // Loose and passive: see lots of flops cheaply, never raise.
@@ -83,31 +83,40 @@ impl RiverRat {
     }
 
     fn postflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
-        // Calls with any piece of the board, and chases draws to the river.
-        //
-        // 1. Made hand (a pair or better, kit::made_hand): call up to max_call_fraction.
-        // 2. Drawing (has_flush_draw or has_straight_draw), not on the river: call up to
-        //    draw_call_fraction.
-        // 3. On the river with a missed draw: check or fold (or bluff with self.rng).
-        //
-        // Placeholder until written:
-        kit::check_or_call(view)
-    }
+        // Passive: never bets, checks when it can. Facing a bet, it calls with any piece of
+        // the board, and with a draw until the river.
+        let hand = has_own_pair_or_better(view);
+        let drawing =
+            view.board.len() < 5 && (kit::has_flush_draw(view) || kit::has_straight_draw(view));
+        let pot_odds = kit::pot_odds(view);
 
-    fn has_flush_draw(view: &PlayerView) -> bool {
-        // Four cards of one suit among hole cards + board, using at least one hole card.
-        // Count suits with card.suit.
-        //
-        // Placeholder until written:
-        false
-    }
+        let (label, action) = if view.to_call == 0 {
+            ("free", kit::check_or_call(view))
+        } else if hand && pot_odds <= self.max_call_fraction {
+            ("made hand", kit::check_or_call(view))
+        } else if drawing && pot_odds <= self.draw_call_fraction {
+            ("drawing", kit::check_or_call(view))
+        } else {
+            ("nothing worth the price", kit::check_or_fold(view))
+        };
 
-    fn has_straight_draw(view: &PlayerView) -> bool {
-        // Four ranks in a row (an open-ended draw) among hole cards + board. Remember an
-        // ace also counts as 1 (A-2-3-4).
-        //
-        // Placeholder until written:
-        false
+        let did = kit::describe(action);
+        notes.push(format!("{label}, pot odds {pot_odds:.2}: {did}"));
+        action
+    }
+}
+
+/// A pair that uses one of your hole cards, or anything better (two pair and up).
+/// A pair that's only on the board doesn't count: everyone has it.
+fn has_own_pair_or_better(view: &PlayerView) -> bool {
+    let hand = kit::made_hand(view).expect("postflop always has a board");
+    match hand.category {
+        HandCategory::HighCard => false,
+        HandCategory::OnePair => view
+            .hole_cards
+            .iter()
+            .any(|card| card.rank.get_rank() == hand.kickers[0]),
+        _ => true,
     }
 }
 

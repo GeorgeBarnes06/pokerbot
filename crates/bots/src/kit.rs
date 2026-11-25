@@ -185,6 +185,63 @@ pub fn equity_vs_random(
     won / samples as f64
 }
 
+/// Four cards of one suit among your hole cards and the board, at least one of
+/// them yours: one more of that suit makes a flush. False once the flush is made.
+pub fn has_flush_draw(view: &PlayerView) -> bool {
+    view.hole_cards.iter().any(|hole| {
+        let same_suit = view
+            .hole_cards
+            .iter()
+            .chain(&view.board)
+            .filter(|card| card.suit == hole.suit)
+            .count();
+        same_suit == 4
+    })
+}
+
+/// An open-ended straight draw (or a double gutshot): at least two different
+/// ranks would complete a straight that uses one of your hole cards. False once
+/// the straight is made. Draws that sit entirely on the board don't count.
+pub fn has_straight_draw(view: &PlayerView) -> bool {
+    // present[r] for ranks 2..=14; an ace is also stored as 1, for A-2-3-4-5.
+    let mut present = [false; 15];
+    for card in view.hole_cards.iter().chain(&view.board) {
+        mark_rank(&mut present, card.rank.get_rank());
+    }
+    let mut hole = [false; 15];
+    for card in view.hole_cards {
+        mark_rank(&mut hole, card.rank.get_rank());
+    }
+
+    if makes_straight(&present, &hole) {
+        return false;
+    }
+    let completing = (2..=14u8)
+        .filter(|&rank| !present[rank as usize])
+        .filter(|&rank| {
+            let mut with_rank = present;
+            mark_rank(&mut with_rank, rank);
+            makes_straight(&with_rank, &hole)
+        })
+        .count();
+    completing >= 2
+}
+
+fn mark_rank(ranks: &mut [bool; 15], rank: u8) {
+    ranks[rank as usize] = true;
+    if rank == 14 {
+        ranks[1] = true;
+    }
+}
+
+/// Five ranks in a row, at least one of them from `hole`.
+fn makes_straight(ranks: &[bool; 15], hole: &[bool; 15]) -> bool {
+    (1..=10).any(|low| {
+        let window = low..low + 5;
+        window.clone().all(|r| ranks[r]) && window.into_iter().any(|r| hole[r])
+    })
+}
+
 /// Short text for a note, e.g. "raise to 300". Describes the action actually
 /// taken, which can differ from the one asked for: the raise helpers shrink a
 /// raise to what the stack allows, or call when raising isn't allowed.
@@ -305,5 +362,62 @@ mod tests {
     fn describe_names_the_action() {
         assert_eq!(describe(Action::Raise { to: 300 }), "raise to 300");
         assert_eq!(describe(Action::Fold), "fold");
+    }
+
+    fn view_with(hole: &str, on_board: &str) -> PlayerView {
+        let mut view = first_view(2);
+        view.hole_cards = cards(hole);
+        view.board = board(on_board);
+        view
+    }
+
+    #[test]
+    fn flush_draw_needs_four_of_a_suit_including_yours() {
+        assert!(has_flush_draw(&view_with("Ah 7h", "Kh 8h 3c")));
+        assert!(has_flush_draw(&view_with("Ah 7c", "Kh 8h 3h")));
+        assert!(
+            !has_flush_draw(&view_with("Ac 7c", "Kh 8h 3h")),
+            "only three hearts"
+        );
+        assert!(
+            !has_flush_draw(&view_with("Ac 7d", "Kh 8h 3h 2h")),
+            "draw is all on the board"
+        );
+        assert!(
+            !has_flush_draw(&view_with("Ah 7h", "Kh 8h 3h")),
+            "flush already made"
+        );
+    }
+
+    #[test]
+    fn straight_draw_is_open_ended_and_uses_your_cards() {
+        assert!(
+            has_straight_draw(&view_with("9c 8d", "7h 6s 2c")),
+            "open-ended 6-9"
+        );
+        assert!(
+            has_straight_draw(&view_with("2c 3d", "4h 5s Kc")),
+            "2-5: an ace or a six"
+        );
+        assert!(
+            !has_straight_draw(&view_with("Ac 2d", "3h 4s Kc")),
+            "A-2-3-4 needs a five only"
+        );
+        assert!(
+            !has_straight_draw(&view_with("9c 2d", "7h 6s Kc")),
+            "gutshot: one rank only"
+        );
+        assert!(
+            !has_straight_draw(&view_with("Ac Kd", "5h 6s 7c 8d")),
+            "draw is all on the board"
+        );
+        assert!(
+            !has_straight_draw(&view_with("9c 8d", "7h 6s 5c")),
+            "straight already made"
+        );
+        assert!(
+            !has_straight_draw(&view_with("Ac Kd", "Qh Js 2c")),
+            "A-K-Q-J needs a ten only"
+        );
     }
 }
