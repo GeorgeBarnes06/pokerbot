@@ -4,14 +4,16 @@
 //!
 //! # Design
 //!
-//! Fill this in before writing the strategy:
-//!
-//! - **Idea:**
-//! - **Reads from `PlayerView`:**
-//! - **Remembers between hands (`observe`):**
-//! - **Parameters to tune:**
-//! - **Expected result:** (net chips / BB per 100 against `check_call`, and in the 8-bot table)
-
+//! - **Idea:** A loose, passive player (a "calling station"). Preflop it calls with a wide
+//!   `PLAYABLE` range and rarely raises. Postflop it calls with any pair or better, and
+//!   chases flush and straight draws until the river; with nothing, it checks or folds.
+//! - **Reads from `PlayerView`:** hole cards, board, street, pot and amount to call.
+//! - **Remembers between hands (`observe`):** nothing; every hand is played on its own.
+//! - **Parameters to tune:** the `PLAYABLE` list, `max_call_fraction` (0.5),
+//!   `draw_call_fraction` (0.35), `open_size_bb` (2.0).
+//! - **Expected result:** slightly better than `check_call`, because it folds its worst hands
+//!   and missed draws, but losing to tight bots like FOLDBOT that bet their strong hands
+//!   into it.
 
 use engine::state::Action;
 use engine::view::PlayerView;
@@ -20,9 +22,21 @@ use rand::SeedableRng;
 
 use crate::{kit, Bot};
 
-/// Starting hands it plays: wide. Fill in, e.g. any pair, any ace, suited connectors.
+/// Starting hands it plays: wide (46 hands, about 20% of all deals; FOLDBOT plays about 6%).
 #[allow(dead_code)] // remove once preflop uses it
-const PLAYABLE: &[&str] = &[];
+#[rustfmt::skip]
+const PLAYABLE: &[&str] = &[
+    // every pair
+    "AA", "KK", "QQ", "JJ", "TT", "99", "88", "77", "66", "55", "44", "33", "22",
+    // any suited ace
+    "AKs", "AQs", "AJs", "ATs", "A9s", "A8s", "A7s", "A6s", "A5s", "A4s", "A3s", "A2s",
+    // big offsuit aces
+    "AKo", "AQo", "AJo", "ATo", "A9o",
+    // two picture cards (or a ten)
+    "KQs", "KJs", "KTs", "QJs", "QTs", "JTs", "KQo", "KJo", "QJo",
+    // suited connectors
+    "T9s", "98s", "87s", "76s", "65s", "54s",
+];
 
 #[allow(dead_code)] // remove once the strategy uses every field
 pub struct RiverRat {
