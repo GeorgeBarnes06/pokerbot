@@ -23,7 +23,6 @@ use rand::SeedableRng;
 use crate::{kit, Bot};
 
 /// Starting hands it plays: wide (46 hands, about 20% of all deals; FOLDBOT plays about 6%).
-#[allow(dead_code)] // remove once preflop uses it
 #[rustfmt::skip]
 const PLAYABLE: &[&str] = &[
     // every pair
@@ -60,14 +59,27 @@ impl RiverRat {
 #[allow(dead_code, unused_variables, clippy::ptr_arg)] // remove once decide calls these and notes is used
 impl RiverRat {
     fn preflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
-        // Loose and passive: see lots of flops cheaply.
-        //
-        // 1. hand in PLAYABLE: call (kit::check_or_call), unless the raise is huge.
-        // 2. Rarely raise; that's not its style.
-        // 3. Otherwise kit::check_or_fold(view).
-        //
-        // Placeholder until written:
-        kit::check_or_call(view)
+        // Loose and passive: see lots of flops cheaply, never raise.
+        let hand_name = kit::preflop_key(view.hole_cards); // e.g. "87s"
+        let raises = kit::raises_this_street(view); // 0 = nobody has raised yet
+
+        // Playable: call the big blind or a single raise; fold to a re-raise.
+        if PLAYABLE.contains(&hand_name.as_str()) {
+            let action = if raises <= 1 {
+                kit::check_or_call(view)
+            } else {
+                kit::check_or_fold(view)
+            };
+            let did = kit::describe(action);
+            notes.push(format!("playable {hand_name}, {raises} raises: {did}"));
+            return action;
+        }
+
+        // Everything else: check if free, otherwise fold.
+        let action = kit::check_or_fold(view);
+        let did = kit::describe(action);
+        notes.push(format!("{hand_name} not in range: {did}"));
+        action
     }
 
     fn postflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
