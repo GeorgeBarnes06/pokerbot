@@ -21,6 +21,19 @@ use rand::SeedableRng;
 
 use crate::{kit, Bot};
 
+/// Hands it always raises, calm or not (the same as FOLDBOT's).
+const PREMIUM: &[&str] = &["AA", "KK", "QQ", "JJ", "AKs", "AKo"];
+/// Hands it plays when calm (the same as FOLDBOT's).
+const PLAYABLE: &[&str] = &["TT", "99", "88", "AQs", "AQo", "AJs", "KQs"];
+/// Extra hands it also plays once tilt is above `wide_range_above`.
+#[rustfmt::skip]
+const TILT_EXTRA: &[&str] = &[
+    "77", "66", "55", "44", "33", "22",
+    "ATs", "A9s", "A8s", "A7s", "A6s", "A5s", "A4s", "A3s", "A2s", "AJo", "ATo",
+    "KJs", "KTs", "QJs", "QTs", "JTs", "KQo", "KJo",
+    "T9s", "98s", "87s",
+];
+
 #[allow(dead_code)] // remove once the strategy uses every field
 pub struct Tilt {
     rng: StdRng,               // seeded per seat by the runner; use it for all randomness
@@ -32,6 +45,8 @@ pub struct Tilt {
     tilted_call_fraction: f64, // largest call when fully tilted
     calm_open_size_bb: f64,    // preflop open size when calm
     tilted_open_size_bb: f64,  // preflop open size when fully tilted
+    reraise_multiple: f64,     // re-raise size, as a multiple of the raise faced
+    wide_range_above: f64,     // tilt above which it also plays TILT_EXTRA
 }
 
 impl Tilt {
@@ -46,6 +61,8 @@ impl Tilt {
             tilted_call_fraction: 0.5,
             calm_open_size_bb: 2.5,
             tilted_open_size_bb: 5.0,
+            reraise_multiple: 3.0,
+            wide_range_above: 0.5,
         }
     }
 }
@@ -59,14 +76,38 @@ impl Tilt {
     }
 
     fn preflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
-        // Like FOLDBOT's preflop, but the more tilted, the more hands it plays and the
-        // bigger it raises:
-        // - open size: self.blend(self.calm_open_size_bb, self.tilted_open_size_bb)
-        // - a wider hand list when tilted (e.g. calm list + extra hands if tilt > 0.5)
-        // Note the mood: e.g. "tilt 0.62, AJo, open to 450".
-        //
-        // Placeholder until written:
-        kit::check_or_call(view)
+        // FOLDBOT's preflop, loosened by mood: bigger opens, bigger calls, and more hands
+        // once tilted.
+        let hand_name = kit::preflop_key(view.hole_cards); // e.g. "AKs"
+        let raises = kit::raises_this_street(view); // 0 = nobody has raised yet
+        let open_bb = self.blend(self.calm_open_size_bb, self.tilted_open_size_bb);
+        let call_limit = self.blend(self.calm_call_fraction, self.tilted_call_fraction);
+        let open_to = (open_bb * view.blinds.big as f64) as u64;
+        let reraise_to = (self.reraise_multiple * view.current_bet as f64) as u64;
+
+        let hand = hand_name.as_str();
+        let wide = self.tilt > self.wide_range_above;
+        let playable = PLAYABLE.contains(&hand) || (wide && TILT_EXTRA.contains(&hand));
+
+        let (label, action) = if PREMIUM.contains(&hand) {
+            let to = if raises == 0 { open_to } else { reraise_to };
+            ("premium", kit::raise_to(view, to))
+        } else if playable && raises == 0 {
+            ("playable", kit::raise_to(view, open_to))
+        } else if playable && raises == 1 && kit::pot_odds(view) <= call_limit {
+            ("playable, cheap raise", kit::check_or_call(view))
+        } else if playable {
+            ("playable, too expensive", kit::check_or_fold(view))
+        } else {
+            ("not in range", kit::check_or_fold(view))
+        };
+
+        let did = kit::describe(action);
+        let tilt = self.tilt;
+        notes.push(format!(
+            "tilt {tilt:.2}, {hand_name} {label}, {raises} raises: {did}"
+        ));
+        action
     }
 
     fn postflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
