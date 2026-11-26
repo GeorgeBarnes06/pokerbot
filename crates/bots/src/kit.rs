@@ -3,7 +3,7 @@
 
 use engine::card::{Card, Rank};
 use engine::deck::Deck;
-use engine::evaluator::{evaluate_best, HandValue};
+use engine::evaluator::{evaluate_best, HandCategory, HandValue};
 use engine::log::ActionRecord;
 use engine::state::{Action, Chips, PlayerStatus};
 use engine::view::PlayerView;
@@ -183,6 +183,45 @@ pub fn equity_vs_random(
     }
 
     won / samples as f64
+}
+
+/// How good a made hand is after the flop, in three buckets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Strength {
+    /// Two pair or better, top pair, or an overpair: usually ahead.
+    Strong,
+    /// A smaller pair of your own: might be ahead.
+    Medium,
+    /// No pair, or a pair that's only on the board: usually behind.
+    Weak,
+}
+
+/// Sorts your hand into a [`Strength`] bucket. Postflop only (needs a board).
+/// Written for FOLDBOT; shared so other bots can use the same buckets.
+pub fn strength(view: &PlayerView) -> Strength {
+    let hand = made_hand(view).unwrap();
+
+    if hand.category >= HandCategory::TwoPair {
+        return Strength::Strong;
+    }
+    if hand.category == HandCategory::HighCard {
+        return Strength::Weak;
+    }
+    let pair = hand.kickers[0];
+    let top = view
+        .board
+        .iter()
+        .map(|card| card.rank.get_rank())
+        .max()
+        .unwrap();
+    let c1 = view.hole_cards[0].rank.get_rank();
+    let c2 = view.hole_cards[1].rank.get_rank();
+    if c1 != pair && c2 != pair {
+        return Strength::Weak;
+    } else if pair >= top {
+        return Strength::Strong;
+    }
+    Strength::Medium
 }
 
 /// Four cards of one suit among your hole cards and the board, at least one of
@@ -418,6 +457,46 @@ mod tests {
         assert!(
             !has_straight_draw(&view_with("Ac Kd", "Qh Js 2c")),
             "A-K-Q-J needs a ten only"
+        );
+    }
+
+    #[test]
+    fn strength_buckets() {
+        let board = "Ks 8d 3c";
+        assert_eq!(
+            strength(&view_with("Kd Qd", board)),
+            Strength::Strong,
+            "top pair"
+        );
+        assert_eq!(
+            strength(&view_with("Ah Ad", board)),
+            Strength::Strong,
+            "overpair"
+        );
+        assert_eq!(
+            strength(&view_with("Kh 8h", board)),
+            Strength::Strong,
+            "two pair"
+        );
+        assert_eq!(
+            strength(&view_with("8h 7h", board)),
+            Strength::Medium,
+            "middle pair"
+        );
+        assert_eq!(
+            strength(&view_with("Qc Qd", board)),
+            Strength::Medium,
+            "pair under the king"
+        );
+        assert_eq!(
+            strength(&view_with("Ah Qh", board)),
+            Strength::Weak,
+            "no pair"
+        );
+        assert_eq!(
+            strength(&view_with("Ah 5h", "Ks 8d 8c")),
+            Strength::Weak,
+            "board pair"
         );
     }
 }

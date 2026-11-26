@@ -5,19 +5,26 @@
 //!
 //! # Design
 //!
-//! Fill this in before writing the strategy:
-//!
-//! - **Idea:**
-//! - **Reads from `PlayerView`:**
-//! - **Remembers between hands (`observe`):**
-//! - **Parameters to tune:**
-//! - **Expected result:** (net chips / BB per 100 against `check_call`, and in the 8-bot table)
+//! - **Idea:** FOLDBOT's tight, aggressive style, loosened by a mood. Losing chips raises
+//!   the mood; every hand it fades. The more tilted, the bigger it opens, the bigger the
+//!   bets it calls, and above half tilt it plays `TILT_EXTRA` hands and bluffs weak ones.
+//! - **Reads from `PlayerView`:** hole cards, board, pot, amount to call, raises this
+//!   street, and its own seat (saved for `observe`).
+//! - **Remembers between hands (`observe`):** its mood, `tilt` from 0.0 (calm) to 1.0. Each
+//!   big blind lost adds `tilt_per_bb_lost`; every hand multiplies it by `cool_down`.
+//! - **Parameters to tune:** `tilt_per_bb_lost` (0.02), `cool_down` (0.9), the calm/tilted
+//!   pairs for open size (2.5/5 BB) and call limit (0.25/0.5 of the pot),
+//!   `wide_range_above` (0.5), `reraise_multiple` (3), `bet_fraction` (0.75),
+//!   `max_bluff_rate` (0.3), and the three hand lists.
+//! - **Expected result:** with the others still check/call stubs, 1st at the 8-bot table
+//!   (tilted on 27% of decisions; bigger tilted bets get paid off). Heads-up it's level with
+//!   FOLDBOT (+4.1 BB/100) and RIVERRAT (-1.8), within noise over 5,000 hands.
 
 use engine::log::HandLog;
 use engine::state::Action;
 use engine::view::PlayerView;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 
 use crate::{kit, Bot};
 
@@ -34,7 +41,6 @@ const TILT_EXTRA: &[&str] = &[
     "T9s", "98s", "87s",
 ];
 
-#[allow(dead_code)] // remove once the strategy uses every field
 pub struct Tilt {
     rng: StdRng,               // seeded per seat by the runner; use it for all randomness
     seat: Option<usize>,       // own seat, learned in decide so observe can find itself
@@ -47,6 +53,8 @@ pub struct Tilt {
     tilted_open_size_bb: f64,  // preflop open size when fully tilted
     reraise_multiple: f64,     // re-raise size, as a multiple of the raise faced
     wide_range_above: f64,     // tilt above which it also plays TILT_EXTRA
+    bet_fraction: f64,         // postflop bet size, as a fraction of the pot
+    max_bluff_rate: f64,       // share of weak hands it bluffs when fully tilted
 }
 
 impl Tilt {
@@ -63,11 +71,12 @@ impl Tilt {
             tilted_open_size_bb: 5.0,
             reraise_multiple: 3.0,
             wide_range_above: 0.5,
+            bet_fraction: 0.75,
+            max_bluff_rate: 0.3,
         }
     }
 }
 
-#[allow(dead_code, unused_variables, clippy::ptr_arg)] // remove once decide calls these and notes is used
 impl Tilt {
     /// A setting between its calm and tilted values, by mood: `calm` at tilt 0.0,
     /// `tilted` at 1.0, and in proportion between.
@@ -111,13 +120,33 @@ impl Tilt {
     }
 
     fn postflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
-        // 1. Rate the hand with kit::made_hand(view).
-        // 2. Call limit: self.blend(self.calm_call_fraction, self.tilted_call_fraction).
-        //    Compare it with kit::pot_odds(view).
-        // 3. When tilted, bet and bluff more often (self.rng).
-        //
-        // Placeholder until written:
-        kit::check_or_call(view)
+        // FOLDBOT's postflop, loosened by mood: calls bigger bets, and bluffs weak hands
+        // when tilted.
+        let call_limit = self.blend(self.calm_call_fraction, self.tilted_call_fraction);
+        let bluff_rate = self.tilt * self.max_bluff_rate; // 0 when calm
+        let nobody_bet = view.to_call == 0;
+
+        let (label, action) = match kit::strength(view) {
+            kit::Strength::Strong if nobody_bet => {
+                ("strong", kit::raise_pot_fraction(view, self.bet_fraction))
+            }
+            kit::Strength::Strong => ("strong", kit::check_or_call(view)),
+            kit::Strength::Medium if nobody_bet => ("medium", kit::check_or_call(view)),
+            kit::Strength::Medium if kit::pot_odds(view) <= call_limit => {
+                ("medium, cheap bet", kit::check_or_call(view))
+            }
+            kit::Strength::Medium => ("medium, too expensive", kit::check_or_fold(view)),
+            kit::Strength::Weak if nobody_bet && self.rng.gen_bool(bluff_rate) => (
+                "weak, bluff",
+                kit::raise_pot_fraction(view, self.bet_fraction),
+            ),
+            kit::Strength::Weak => ("weak", kit::check_or_fold(view)),
+        };
+
+        let did = kit::describe(action);
+        let tilt = self.tilt;
+        notes.push(format!("tilt {tilt:.2}, {label}: {did}"));
+        action
     }
 }
 

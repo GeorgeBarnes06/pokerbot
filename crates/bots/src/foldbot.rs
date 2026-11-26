@@ -17,7 +17,6 @@
 //!   strong hands. Small but steady wins in the 8-bot table, folding most hands and losing
 //!   little apart from blinds.
 
-use engine::evaluator::HandCategory;
 use engine::state::Action;
 use engine::view::PlayerView;
 
@@ -28,12 +27,6 @@ use crate::{kit, Bot};
 
 const PREMIUM: &[&str] = &["AA", "KK", "QQ", "JJ", "AKs", "AKo"];
 const PLAYABLE: &[&str] = &["TT", "99", "88", "AQs", "AQo", "AJs", "KQs"];
-
-enum Strength {
-    Strong,
-    Medium,
-    Weak,
-}
 
 pub struct FoldBot {
     #[allow(dead_code)] // unused until the strategy needs randomness
@@ -97,8 +90,8 @@ impl FoldBot {
     }
 
     fn postflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
-        let action = match strength(view) {
-            Strength::Strong => {
+        let action = match kit::strength(view) {
+            kit::Strength::Strong => {
                 if view.to_call == 0 {
                     //if nobody has bet
                     kit::raise_pot_fraction(view, self.bet_fraction) // bet 75% of the pot
@@ -106,7 +99,7 @@ impl FoldBot {
                     kit::check_or_call(view)
                 }
             }
-            Strength::Medium => {
+            kit::Strength::Medium => {
                 if view.to_call == 0 {
                     //if nobody has bet
                     kit::check_or_call(view)
@@ -120,7 +113,7 @@ impl FoldBot {
                     }
                 }
             }
-            Strength::Weak => {
+            kit::Strength::Weak => {
                 if view.to_call == 0 {
                     kit::check_or_call(view)
                 } else {
@@ -142,30 +135,4 @@ impl Bot for FoldBot {
             self.postflop(view, notes)
         }
     }
-}
-
-fn strength(view: &PlayerView) -> Strength {
-    let hand = kit::made_hand(view).unwrap();
-
-    if hand.category >= HandCategory::TwoPair {
-        return Strength::Strong;
-    }
-    if hand.category == HandCategory::HighCard {
-        return Strength::Weak;
-    }
-    let pair = hand.kickers[0];
-    let top = view
-        .board
-        .iter()
-        .map(|card| card.rank.get_rank())
-        .max()
-        .unwrap();
-    let c1 = view.hole_cards[0].rank.get_rank();
-    let c2 = view.hole_cards[1].rank.get_rank();
-    if c1 != pair && c2 != pair {
-        return Strength::Weak;
-    } else if pair >= top {
-        return Strength::Strong;
-    }
-    Strength::Medium
 }
