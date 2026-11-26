@@ -52,12 +52,10 @@ impl Tilt {
 
 #[allow(dead_code, unused_variables, clippy::ptr_arg)] // remove once decide calls these and notes is used
 impl Tilt {
+    /// A setting between its calm and tilted values, by mood: `calm` at tilt 0.0,
+    /// `tilted` at 1.0, and in proportion between.
     fn blend(&self, calm: f64, tilted: f64) -> f64 {
-        // A value between calm and tilted, by mood: calm + (tilted − calm) × self.tilt.
-        // Use it for every setting that changes with mood.
-        //
-        // Placeholder until written:
-        calm
+        calm + (tilted - calm) * self.tilt
     }
 
     fn preflop(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
@@ -92,18 +90,23 @@ impl Bot for Tilt {
         }
     }
 
-    fn observe(&mut self, log: &HandLog) { // Update the mood after every hand.
-        
-        let Some(seat) = self.seat else { return; };
-        let Some(me) = log.seats.iter().find(|s| s.seat == seat) else { return; };
-        let old_stack = me.stack;               // before the hand
+    fn observe(&mut self, log: &HandLog) {
+        // Update the mood after every hand.
+
+        let Some(seat) = self.seat else {
+            return;
+        };
+        let Some(me) = log.seats.iter().find(|s| s.seat == seat) else {
+            return;
+        };
+        let old_stack = me.stack; // before the hand
         let new_stack = log.final_stacks[seat]; // after the hand
         let chip_change = new_stack as i64 - old_stack as i64;
 
         if chip_change < 0 {
             let bb_lost = -chip_change as f64 / log.blinds.big as f64;
             self.tilt += bb_lost * self.tilt_per_bb_lost;
-        } 
+        }
         self.tilt *= self.cool_down;
         self.tilt = self.tilt.clamp(0.0, 1.0);
     }
