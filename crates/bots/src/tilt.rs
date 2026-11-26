@@ -92,14 +92,19 @@ impl Bot for Tilt {
         }
     }
 
-    fn observe(&mut self, log: &HandLog) {
-        // Update the mood after every hand.
-        //
-        // 1. Find your seat: self.seat (skip if None, i.e. you haven't acted yet).
-        // 2. Chips won or lost this hand:
-        //    log.final_stacks[seat] − the stack in log.seats for that seat.
-        // 3. Lost: add (big blinds lost × self.tilt_per_bb_lost) to self.tilt.
-        // 4. Every hand: self.tilt *= self.cool_down, then clamp to 0.0..=1.0.
-        let _ = log;
+    fn observe(&mut self, log: &HandLog) { // Update the mood after every hand.
+        
+        let Some(seat) = self.seat else { return; };
+        let Some(me) = log.seats.iter().find(|s| s.seat == seat) else { return; };
+        let old_stack = me.stack;               // before the hand
+        let new_stack = log.final_stacks[seat]; // after the hand
+        let chip_change = new_stack as i64 - old_stack as i64;
+
+        if chip_change < 0 {
+            let bb_lost = -chip_change as f64 / log.blinds.big as f64;
+            self.tilt += bb_lost * self.tilt_per_bb_lost;
+        } 
+        self.tilt *= self.cool_down;
+        self.tilt = self.tilt.clamp(0.0, 1.0);
     }
 }
