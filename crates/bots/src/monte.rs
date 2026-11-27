@@ -20,7 +20,6 @@ use rand::SeedableRng;
 
 use crate::{kit, Bot};
 
-#[allow(dead_code)] // remove once the strategy uses every field
 pub struct Monte {
     rng: StdRng,       // seeded per seat by the runner; use it for all randomness
     samples: u32,      // run-outs per equity estimate (more = steadier, slower)
@@ -41,41 +40,57 @@ impl Monte {
     }
 }
 
-#[allow(dead_code, unused_variables, clippy::ptr_arg)] // remove once decide calls these
 impl Monte {
+    /// Expected chips won by betting `bet_fraction` of the pot, when nobody has bet.
     fn bet_value(&self, view: &PlayerView, equity: f64) -> f64 {
-        // Expected chips won by betting bet_fraction of the pot:
-        //   bet = bet_fraction × pot
-        //   assumed_fold × pot + (1 − assumed_fold) × (equity × (pot + 2 × bet) − bet)
-        //
-        // Placeholder until written:
-        0.0
+        // Expected chips won by betting bet_fraction of the pot: they fold assumed_fold of
+        // the time (you win the pot), otherwise they call and you win equity of a bigger pot.
+        let pot = view.pot as f64;
+        let bet = self.bet_fraction * pot;
+        let if_they_fold = self.assumed_fold * pot;
+        let if_they_call = (1.0 - self.assumed_fold) * (equity * (pot + 2.0 * bet) - bet);
+        if_they_fold + if_they_call
     }
 
+    /// Expected chips won by calling a bet, compared with folding (worth 0): your share
+    /// of the bigger pot, minus what the call costs.
     fn call_value(&self, view: &PlayerView, equity: f64) -> f64 {
-        // Expected chips won by calling: equity × (pot + to_call) − to_call.
-        //
-        // Placeholder until written:
-        0.0
+        equity * (view.pot as f64 + view.to_call as f64) - view.to_call as f64
     }
 }
 
 impl Bot for Monte {
-    fn decide(&mut self, view: &PlayerView, _notes: &mut Vec<String>) -> Action {
-        // The same rule on every street, so no preflop/postflop split.
-        //
-        // 1. opponents = kit::players_in_hand(view) − 1
-        // 2. equity = kit::equity_vs_random(view, opponents, self.samples, &mut self.rng)
-        //    (against any two cards: that's what makes it MONTE).
-        // 3. Work out self.bet_value and self.call_value; folding is worth 0.
-        // 4. Take the biggest:
-        //    - betting  → kit::raise_pot_fraction(view, self.bet_fraction)
-        //    - calling  → kit::check_or_call(view), only if
-        //                 equity > kit::pot_odds(view) + self.margin
-        //    - otherwise → kit::check_or_fold(view)
-        // 5. Note: equity, pot odds and the values, then kit::describe(action).
-        //
-        // Placeholder until written:
-        kit::check_or_call(view)
+    fn decide(&mut self, view: &PlayerView, notes: &mut Vec<String>) -> Action {
+        // The same rule on every street, preflop included: estimate equity, value each
+        // option in chips, take the best.
+
+        // Equity against random hands: what share of the pot it wins on average.
+        let opponents = kit::players_in_hand(view) - 1;
+        let equity = kit::equity_vs_random(view, opponents, self.samples, &mut self.rng);
+
+        // What each option is worth, in chips.
+        let check = equity * view.pot as f64; // nobody has bet: see the next card free
+        let bet = self.bet_value(view, equity); // nobody has bet: bet 80% of the pot
+        let call = self.call_value(view, equity); // facing a bet: call (folding is worth 0)
+        let pot_odds = kit::pot_odds(view);
+
+        let action = if view.to_call == 0 {
+            // Nobody has bet: bet when that's worth more than checking.
+            if bet > check {
+                kit::raise_pot_fraction(view, self.bet_fraction)
+            } else {
+                kit::check_or_call(view)
+            }
+        } else if call > 0.0 && equity > pot_odds + self.margin {
+            // Facing a bet: call when it makes money, with a margin because random
+            // opponents make its hand look better than it is.
+            kit::check_or_call(view)
+        } else {
+            kit::check_or_fold(view)
+        };
+
+        let did = kit::describe(action);
+        notes.push(format!("equity {equity:.2}, pot odds {pot_odds:.2}: {did}"));
+        action
     }
 }
